@@ -1,11 +1,11 @@
 ---
 title: "Megatron-LM 分布式训练（七）：显存与性能调优（重计算 / FP8-BF16 / MFU）"
-description: "系列收官：显存都花在哪、重计算如何用算力换激活显存、BF16 与 FP8 混合精度怎么选、MFU 为什么是训练效率的金标准，以及一份按性价比排序的实战调优清单。"
-pubDate: 2026-10-14
+description: "显存都花在哪、重计算如何用算力换激活显存、BF16 与 FP8 混合精度怎么选、MFU 为什么是训练效率的金标准，以及一份按性价比排序的实战调优清单。"
+pubDate: 2026-09-26
 tags: ["Megatron-LM", "分布式训练", "性能调优", "混合精度", "MFU"]
 ---
 
-> **本文是《Megatron-LM 分布式训练》系列第 7 篇（完结）**。前六篇讲"怎么把模型切到多卡"（[总览](/blog/megatron-lm-01-overview/) / [TP](/blog/megatron-lm-02-tensor-parallel/) / [PP](/blog/megatron-lm-03-pipeline-parallel/) / [DP](/blog/megatron-lm-04-data-parallel-zero/) / [通信](/blog/megatron-lm-05-communication/) / [MoE·CP](/blog/megatron-lm-06-moe-ep-cp/)），本篇换个视角：**同样的卡，怎么塞下更大的模型、跑得更快**。
+> **本文是《Megatron-LM 分布式训练》系列第 7 篇**。前六篇讲"怎么把模型切到多卡"（[总览](/blog/megatron-lm-01-overview/) / [TP](/blog/megatron-lm-02-tensor-parallel/) / [PP](/blog/megatron-lm-03-pipeline-parallel/) / [DP](/blog/megatron-lm-04-data-parallel-zero/) / [通信](/blog/megatron-lm-05-communication/) / [MoE·CP](/blog/megatron-lm-06-moe-ep-cp/)），本篇换个视角：**同样的卡，怎么塞下更大的模型、跑得更快**。
 
 ## 背景：调优的三把武器
 
@@ -127,4 +127,4 @@ throughput = num_floating_point_operations(...) / (elapsed_time_per_iteration * 
 
 ---
 
-至此，《Megatron-LM 分布式训练》系列完结。从"为什么要并行"到"五维并行怎么切"，再到"网络与性能怎么调"，希望这条主线能帮你建立起大模型分布式训练的完整心智模型。有问题欢迎交流。
+至此，并行（第 1-4 篇）、通信（第 5 篇）、显存与效率（本篇）都讲完了。最后一篇[《Checkpoint、容错与弹性训练》](/blog/megatron-lm-08-checkpoint-ft/)解决几百卡训几周时的工程现实：硬件一定会出故障，怎么不让心血白费。

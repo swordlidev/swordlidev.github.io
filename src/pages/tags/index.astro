@@ -5,10 +5,10 @@ import { getPublishedPosts, groupByTag } from '../../utils/posts';
 const tags = groupByTag(await getPublishedPosts());
 ---
 
-<BaseLayout title="标签" description="按标签浏览文章">
+<BaseLayout title="Tags" description="Browse posts by tag.">
   <header class="page-header">
-    <h1>标签</h1>
-    <p>共 {tags.length} 个标签</p>
+    <h1>Tags</h1>
+    <p>{tags.length} tags</p>
   </header>
 
   {
@@ -24,7 +24,7 @@ const tags = groupByTag(await getPublishedPosts());
         ))}
       </ul>
     ) : (
-      <p class="empty">暂无标签。</p>
+      <p class="empty">No tags yet.</p>
     )
   }
 </BaseLayout>

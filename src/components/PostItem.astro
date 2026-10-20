@@ -13,7 +13,7 @@ const { title, description, pubDate, tags, draft } = post.data;
 <li class="post-item">
   <div class="post-item-head">
     <a class="post-item-title" href={`/blog/${post.id}/`}>
-      {draft && <span class="draft-badge">草稿</span>}
+      {draft && <span class="draft-badge">Draft</span>}
       {title}
     </a>
     <time datetime={pubDate.toISOString()}>{formatDate(pubDate)}</time>

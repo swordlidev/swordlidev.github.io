@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（三）：流水线并行 PP 与 1F1B 调度"
 description: "流水线并行把模型的层切到不同卡。本文讲清 microbatch、流水线气泡（bubble），对比朴素 GPipe 与 1F1B 调度，推导 bubble 公式，并给出 64 卡 3D 并行蓝图。"
-pubDate: 2026-10-18
+pubDate: 2026-09-12
 tags: ["Megatron-LM", "分布式训练", "流水线并行", "LLM"]
 ---
 

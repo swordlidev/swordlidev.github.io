@@ -17,24 +17,24 @@ const minutes = readingTime(post.body);
 const hasMath = /\$/.test(post.body ?? '');
 ---
 
-<BaseLayout title={title} description={description} type="article" math={hasMath}>
+<BaseLayout title={title} description={description} type="article" math={hasMath} lang="zh-CN">
   <div class="post-layout">
     <article class="post">
       <header class="post-header">
         <h1>
-          {draft && <span class="draft-badge">草稿</span>}
+          {draft && <span class="draft-badge">Draft</span>}
           {title}
         </h1>
         <div class="post-meta">
-          <span>发布于 <time datetime={pubDate.toISOString()}>{formatDate(pubDate)}</time></span>
+          <span>Published <time datetime={pubDate.toISOString()}>{formatDate(pubDate)}</time></span>
           {
             updatedDate && (
               <span>
-                更新于 <time datetime={updatedDate.toISOString()}>{formatDate(updatedDate)}</time>
+                Updated <time datetime={updatedDate.toISOString()}>{formatDate(updatedDate)}</time>
               </span>
             )
           }
-          <span>约 {minutes} 分钟读完</span>
+          <span>{minutes} min read</span>
         </div>
         {
           tags.length > 0 && (
@@ -57,16 +57,16 @@ const hasMath = /\$/.test(post.body ?? '');
 
       {
         (prev || next) && (
-          <nav class="post-nav" aria-label="文章导航">
+          <nav class="post-nav" aria-label="Post navigation">
             {prev && (
               <a class="prev" href={`/blog/${prev.id}/`}>
-                <span class="label">上一篇</span>
+                <span class="label">Previous</span>
                 {prev.data.title}
               </a>
             )}
             {next && (
               <a class="next" href={`/blog/${next.id}/`}>
-                <span class="label">下一篇</span>
+                <span class="label">Next</span>
                 {next.data.title}
               </a>
             )}
@@ -77,9 +77,9 @@ const hasMath = /\$/.test(post.body ?? '');
 
     {
       toc.length > 0 && (
-        <aside class="toc" aria-label="文章目录">
+        <aside class="toc" aria-label="Table of contents">
           <div class="toc-inner">
-            <div class="toc-title">目录</div>
+            <div class="toc-title">Contents</div>
             <ul>
               {toc.map((h) => (
                 <li class={`depth-${h.depth}`}>
@@ -105,21 +105,21 @@ const hasMath = /\$/.test(post.body ?? '');
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'copy-btn';
-    btn.textContent = '复制';
+    btn.textContent = 'Copy';
     btn.addEventListener('click', async () => {
       const code = pre.querySelector('code')?.innerText ?? pre.innerText;
       try {
         await navigator.clipboard.writeText(code);
-        btn.textContent = '已复制';
+        btn.textContent = 'Copied';
       } catch {
-        btn.textContent = '复制失败';
+        btn.textContent = 'Failed';
       }
-      window.setTimeout(() => (btn.textContent = '复制'), 1500);
+      window.setTimeout(() => (btn.textContent = 'Copy'), 1500);
     });
     wrapper.appendChild(btn);
   });
 
-  // 目录高亮当前章节
+  // Highlight the current section in the TOC
   const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.toc a'));
   if (links.length > 0 && 'IntersectionObserver' in window) {
     const map = new Map<Element, HTMLAnchorElement>();

@@ -8,7 +8,7 @@ interface Props {
 
 const { pub } = Astro.props;
 
-// 将作者串中的本人姓名加粗
+// Bold the author's own name within the author string
 const name = PROFILE.name;
 const parts = pub.authors.split(name);
 ---
@@ -30,7 +30,7 @@ const parts = pub.authors.split(name);
   </div>
   <div class="pub-meta">
     <span class={`pub-venue pub-${pub.type}`}>{pub.venue}</span>
-    {pub.citations != null && <span class="pub-cite">被引 {pub.citations}</span>}
+    {pub.citations != null && <span class="pub-cite">Cited by {pub.citations}</span>}
     {
       pub.links && pub.links.length > 0 && (
         <span class="pub-links">

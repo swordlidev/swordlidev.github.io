@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（五）：通信与网络实测（NCCL / RoCE）"
 description: "并行策略的上限由物理网络决定。本文介绍 NVLink 与 RoCE、GPUDirect RDMA，讲解 NCCL 在机内 NVLink + 机间多网卡 RoCE 上的跑法、关键调优旋钮、busbw 健康标准，以及带宽如何决定通信能否被计算隐藏。"
-pubDate: 2026-10-16
+pubDate: 2026-09-19
 tags: ["Megatron-LM", "分布式训练", "NCCL", "RoCE", "网络"]
 ---
 

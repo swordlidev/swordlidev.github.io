@@ -21,8 +21,8 @@ const recentNews = NEWS.slice(0, 5);
       <p class="hero-affil">{PROFILE.affiliation} &middot; {PROFILE.location}</p>
       <p class="hero-bio">{PROFILE.bio}</p>
       <SocialLinks />
-      <dl class="metrics" aria-label="Google Scholar 指标">
-        <div><dt>引用</dt><dd>{SCHOLAR.citations}</dd></div>
+      <dl class="metrics" aria-label="Google Scholar metrics">
+        <div><dt>Citations</dt><dd>{SCHOLAR.citations}</dd></div>
         <div><dt>h-index</dt><dd>{SCHOLAR.hIndex}</dd></div>
         <div><dt>i10-index</dt><dd>{SCHOLAR.i10Index}</dd></div>
       </dl>
@@ -30,14 +30,14 @@ const recentNews = NEWS.slice(0, 5);
   </section>
 
   <section class="section">
-    <div class="section-header"><h2>研究方向</h2></div>
+    <div class="section-header"><h2>Research Interests</h2></div>
     <ul class="tag-list tag-cloud">
       {RESEARCH_INTERESTS.map((r) => <li><span class="tag">{r}</span></li>)}
     </ul>
   </section>
 
   <section class="section">
-    <div class="section-header"><h2>近期动态</h2></div>
+    <div class="section-header"><h2>News</h2></div>
     <ul class="news-list">
       {
         recentNews.map((n) => (
@@ -52,8 +52,8 @@ const recentNews = NEWS.slice(0, 5);
 
   <section class="section">
     <div class="section-header">
-      <h2>代表性论文</h2>
-      <a href="/publications/">全部论文 &rarr;</a>
+      <h2>Selected Publications</h2>
+      <a href="/publications/">All publications &rarr;</a>
     </div>
     <ol class="pub-list">
       {selected.map((pub) => <PubItem pub={pub} />)}
@@ -64,8 +64,8 @@ const recentNews = NEWS.slice(0, 5);
     posts.length > 0 && (
       <section class="section">
         <div class="section-header">
-          <h2>最新博客</h2>
-          <a href="/blog/">全部文章 &rarr;</a>
+          <h2>Latest Posts</h2>
+          <a href="/blog/">All posts &rarr;</a>
         </div>
         <ul class="post-list">
           {posts.map((post) => (

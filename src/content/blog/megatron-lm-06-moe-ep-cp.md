@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（六）：MoE 专家并行 EP 与上下文并行 CP"
 description: "把 3D 并行扩展到五维。本文讲 MoE 为什么能解耦参数量与计算量、专家并行 EP 的两次 all-to-all、router 的负载均衡，以及上下文并行 CP 如何用 Ring Attention + zigzag 切法处理超长序列。"
-pubDate: 2026-10-15
+pubDate: 2026-09-23
 tags: ["Megatron-LM", "分布式训练", "MoE", "专家并行", "上下文并行"]
 ---
 

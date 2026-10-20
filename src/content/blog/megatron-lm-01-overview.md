@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（一）：并行维度与训练生命周期"
 description: "分布式训练系列开篇：先补齐为什么需要多卡训练、集合通信原语等背景，再讲 Megatron 的 GPU 网格世界观（TP/PP/DP/CP/EP）和一次训练迭代的完整生命周期。"
-pubDate: 2026-10-20
+pubDate: 2026-09-05
 tags: ["Megatron-LM", "分布式训练", "LLM", "并行计算"]
 ---
 
@@ -15,6 +15,7 @@ tags: ["Megatron-LM", "分布式训练", "LLM", "并行计算"]
 > 5. [通信与网络实测（NCCL / RoCE）](/blog/megatron-lm-05-communication/)
 > 6. [MoE 专家并行 EP 与上下文并行 CP](/blog/megatron-lm-06-moe-ep-cp/)
 > 7. [显存与性能调优](/blog/megatron-lm-07-perf-tuning/)
+> 8. [Checkpoint、容错与弹性训练](/blog/megatron-lm-08-checkpoint-ft/)
 
 ## 背景：为什么单卡训练不了大模型
 
