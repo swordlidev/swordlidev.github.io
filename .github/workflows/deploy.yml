@@ -21,6 +21,13 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+        with:
+          # 自动启用并把 Pages 构建源切换为 GitHub Actions（停用旧的分支/Jekyll 构建）
+          enablement: true
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
