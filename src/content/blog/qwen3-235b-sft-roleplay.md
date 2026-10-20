@@ -151,8 +151,70 @@ Megatron 内置 SFT prompt format 只有 `nemotron-* / identity / default` 几�
 --seq-length 4096 --max-position-embeddings 40960  （vocab 151936）
 ```
 
-- 实测构建：**总参数 235.10B**，每卡最重分片 **4.07B**（与显存测算一致）。
-- MoE：128 专家 / 每 token top-8，专家 all-to-all 走 RoCE。
+### 4.0 名字怎么读：`235B-A22B`
+
+- **235B** = 总参数量（含全部 128 个专家），决定**模型容量**与**存储/显存**占用。
+- **A22B** = Active 22B，每个 token 实际只激活 **≈22B** 参数（top-8 专家 + 注意力等共享部分），决定**单 token 计算量（FLOPs）**。
+- 这正是 MoE 的精髓：**容量（235B）与算力（22B/token）解耦**——用稀疏激活把参数堆大，但每步只算一小部分。
+
+### 4.1 规模与结构
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `--num-layers` | 94 | Transformer 解码层数 |
+| `--hidden-size` | 4096 | 隐藏维 d_model（残差流宽度） |
+| `--ffn-hidden-size` | 12288 | 稠密 FFN 中间维（HF config 的 `intermediate_size`）。本模型为**全 MoE**，专家 FFN 宽度另由 `--moe-ffn-hidden-size` 决定；此值作架构基准保留 |
+| `--seq-length` | 4096 | 训练截断序列长度（本次 SFT；可调大到 8192） |
+| `--max-position-embeddings` | 40960 | 模型支持的最大位置（Qwen3 原生上限） |
+| vocab | 151936 | 词表大小（`--make-vocab-size-divisible-by 1187` 对齐后） |
+
+### 4.2 注意力：GQA + QK-Norm
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `--num-attention-heads` | 64 | Query 头数 |
+| `--group-query-attention` | — | 启用 **GQA**（分组查询注意力） |
+| `--num-query-groups` | 4 | **KV 头/组数 = 4**：64 个 Q 头共享 4 组 K/V（每 16 个 Q 共享 1 组）→ 大幅压缩 KV cache。**这 4 正是转换阶段 TP≤4 的根源**（§5.2 / §7-#4） |
+| `--kv-channels` | 128 | 每个注意力头维度 head_dim=128。注意 64×128=8192 ≠ hidden 4096 → Qwen3 的 **head_dim 与 hidden 解耦**，独立设定 |
+| `--qk-layernorm` | — | 对 Q、K 各做一次归一化（Qwen3 的 **QK-Norm**），稳定注意力数值、利于大模型训练稳定性 |
+
+### 4.3 归一化 / 激活 / 偏置 / 词嵌入
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `--normalization RMSNorm` | — | 用 RMSNorm（比 LayerNorm 省算、无需减均值），Qwen3/LLaMA 系标准 |
+| `--norm-epsilon` | 1e-6 | 归一化数值稳定项 |
+| `--swiglu` | — | FFN 用 **SwiGLU** 门控激活（gated linear unit，比 GeLU 效果好） |
+| `--disable-bias-linear` | — | 所有 Linear **不带 bias**（现代 LLM 惯例，省参省算） |
+| `--untie-embeddings-and-output-weights` | — | 输入 embedding 与输出 lm-head **不共享权重**（解绑，各自独立训练） |
+
+### 4.4 位置编码：RoPE
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `--position-embedding-type rope` | — | 旋转位置编码 RoPE（相对位置，外推友好） |
+| `--rotary-base` | 1000000 | RoPE 的 θ/base=1e6（**高 base 利于长上下文**，配合 40960 位置） |
+| `--rotary-percent` | 1.0 | 100% 的头维度都施加 RoPE |
+
+### 4.5 MoE（本模型核心）
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| `--num-experts` | 128 | 每个 MoE 层 128 个专家 FFN |
+| `--moe-ffn-hidden-size` | 1536 | **单个专家**的 FFN 中间维（专家被切得很"瘦"，靠数量堆容量） |
+| `--moe-router-topk` | 8 | 每个 token 路由到 **top-8** 专家（稀疏激活，对应 A22B） |
+| `--moe-router-dtype` | fp32 | router 的 gating 用 fp32 计算，**防止路由打分抖动/数值不稳** |
+| `--moe-router-load-balancing-type` | aux_loss | 用**辅助损失**做负载均衡（防专家塌缩，日志中的 `load_balancing_loss`） |
+| `--moe-aux-loss-coeff` | 1e-3 | 上述辅助损失的系数（软约束，太大伤主任务、太小不均衡） |
+| `--moe-token-dispatcher-type` | alltoall | 专家并行 EP 的 token 分发用 **all-to-all**（标准方案，跨机走 RoCE） |
+| `--moe-layer-freq` | 1 | **每一层都是 MoE 层**（频率=1；非隔层） |
+| `--moe-layer-recompute` | — | 对 MoE 层做激活**重计算**（用算力换显存，MoE 激活是大头） |
+
+### 4.6 实测
+
+- 构建后**总参数 235.10B**，每卡最重分片 **4.07B**（与 `TP8/PP2/EP4` 的显存测算一致）。
+- MoE：128 专家 / 每 token top-8；专家 dispatch/combine 的两次 all-to-all 走已实测的 ~184 GB/s RoCE。
+- 架构参数在**转换**与 **SFT** 两个脚本里必须**逐字一致**，否则 mcore 权重加载会 shape/结构 mismatch。
 
 ---
 
