@@ -1,0 +1,30 @@
+---
+import BaseHead from '../components/BaseHead.astro';
+import Header from '../components/Header.astro';
+import Footer from '../components/Footer.astro';
+import { SITE } from '../consts';
+
+interface Props {
+  title?: string;
+  description?: string;
+  type?: 'website' | 'article';
+  math?: boolean;
+}
+
+const { title, description, type, math } = Astro.props;
+---
+
+<!doctype html>
+<html lang={SITE.lang}>
+  <head>
+    <BaseHead title={title} description={description} type={type} math={math} />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到正文</a>
+    <Header />
+    <main id="main" class="container">
+      <slot />
+    </main>
+    <Footer />
+  </body>
+</html>

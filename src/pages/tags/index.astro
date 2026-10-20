@@ -1,0 +1,30 @@
+---
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { getPublishedPosts, groupByTag } from '../../utils/posts';
+
+const tags = groupByTag(await getPublishedPosts());
+---
+
+<BaseLayout title="标签" description="按标签浏览文章">
+  <header class="page-header">
+    <h1>标签</h1>
+    <p>共 {tags.length} 个标签</p>
+  </header>
+
+  {
+    tags.length > 0 ? (
+      <ul class="tag-list tag-cloud">
+        {tags.map((t) => (
+          <li>
+            <a class="tag" href={`/tags/${t.slug}/`}>
+              #{t.name}
+              <span class="tag-count">{t.posts.length}</span>
+            </a>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p class="empty">暂无标签。</p>
+    )
+  }
+</BaseLayout>

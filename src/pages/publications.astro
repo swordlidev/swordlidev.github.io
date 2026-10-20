@@ -1,0 +1,40 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import PubItem from '../components/PubItem.astro';
+import { PUBLICATIONS, type Publication } from '../data/publications';
+import { SCHOLAR } from '../consts';
+
+const sorted = [...PUBLICATIONS].sort((a, b) => b.year - a.year);
+const groups = new Map<number, Publication[]>();
+for (const p of sorted) {
+  const list = groups.get(p.year) ?? [];
+  list.push(p);
+  groups.set(p.year, list);
+}
+---
+
+<BaseLayout title="论文" description="Jian Li 的论文列表，涵盖 LLM、MLLM、Agent、RL 等方向。">
+  <header class="page-header">
+    <h1>论文 Publications</h1>
+    <p>
+      共 {PUBLICATIONS.length} 篇（节选），重点为近 3 年工作 &middot;
+      <a href={SCHOLAR.profile} target="_blank" rel="noopener noreferrer">Google Scholar 完整列表 &rarr;</a>
+    </p>
+    <p class="pub-hint">
+      <span class="legend"><span class="dot dot-first"></span>加粗为本人署名</span>
+    </p>
+  </header>
+
+  {
+    [...groups].map(([year, list]) => (
+      <section class="year-group">
+        <h2 class="year-title">{year}</h2>
+        <ol class="pub-list">
+          {list.map((pub) => (
+            <PubItem pub={pub} />
+          ))}
+        </ol>
+      </section>
+    ))
+  }
+</BaseLayout>

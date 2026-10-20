@@ -1,0 +1,77 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import PostItem from '../components/PostItem.astro';
+import PubItem from '../components/PubItem.astro';
+import SocialLinks from '../components/SocialLinks.astro';
+import { PROFILE, SCHOLAR, RESEARCH_INTERESTS, NEWS } from '../consts';
+import { PUBLICATIONS } from '../data/publications';
+import { getPublishedPosts } from '../utils/posts';
+
+const posts = (await getPublishedPosts()).slice(0, 4);
+const selected = PUBLICATIONS.filter((p) => p.selected).sort((a, b) => b.year - a.year);
+---
+
+<BaseLayout>
+  <section class="hero">
+    <img class="avatar" src={PROFILE.avatar} alt={PROFILE.name} width="128" height="128" loading="eager" />
+    <div class="hero-body">
+      <h1>{PROFILE.name} <span class="hero-name-cn">{PROFILE.nameCn}</span></h1>
+      <p class="hero-title">{PROFILE.title}</p>
+      <p class="hero-affil">{PROFILE.affiliation} &middot; {PROFILE.location}</p>
+      <p class="hero-bio">{PROFILE.bio}</p>
+      <SocialLinks />
+      <dl class="metrics" aria-label="Google Scholar 指标">
+        <div><dt>引用</dt><dd>{SCHOLAR.citations}</dd></div>
+        <div><dt>h-index</dt><dd>{SCHOLAR.hIndex}</dd></div>
+        <div><dt>i10-index</dt><dd>{SCHOLAR.i10Index}</dd></div>
+      </dl>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-header"><h2>研究方向</h2></div>
+    <ul class="tag-list tag-cloud">
+      {RESEARCH_INTERESTS.map((r) => <li><span class="tag">{r}</span></li>)}
+    </ul>
+  </section>
+
+  <section class="section">
+    <div class="section-header"><h2>近期动态</h2></div>
+    <ul class="news-list">
+      {
+        NEWS.map((n) => (
+          <li>
+            <time>{n.date}</time>
+            <span set:html={n.html} />
+          </li>
+        ))
+      }
+    </ul>
+  </section>
+
+  <section class="section">
+    <div class="section-header">
+      <h2>代表性论文</h2>
+      <a href="/publications/">全部论文 &rarr;</a>
+    </div>
+    <ol class="pub-list">
+      {selected.map((pub) => <PubItem pub={pub} />)}
+    </ol>
+  </section>
+
+  {
+    posts.length > 0 && (
+      <section class="section">
+        <div class="section-header">
+          <h2>最新博客</h2>
+          <a href="/blog/">全部文章 &rarr;</a>
+        </div>
+        <ul class="post-list">
+          {posts.map((post) => (
+            <PostItem post={post} />
+          ))}
+        </ul>
+      </section>
+    )
+  }
+</BaseLayout>

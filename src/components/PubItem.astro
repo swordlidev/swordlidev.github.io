@@ -1,0 +1,55 @@
+---
+import { PROFILE } from '../consts';
+import type { Publication } from '../data/publications';
+
+interface Props {
+  pub: Publication;
+}
+
+const { pub } = Astro.props;
+
+// 将作者串中的本人姓名加粗
+const name = PROFILE.name;
+const parts = pub.authors.split(name);
+---
+
+<li class="pub-item">
+  <div class="pub-title">
+    {pub.title}
+    {pub.note && <span class="pub-note">{pub.note}</span>}
+  </div>
+  <div class="pub-authors">
+    {
+      parts.map((seg, i) => (
+        <>
+          {seg}
+          {i < parts.length - 1 && <strong>{name}</strong>}
+        </>
+      ))
+    }
+  </div>
+  <div class="pub-meta">
+    <span class={`pub-venue pub-${pub.type}`}>{pub.venue}</span>
+    {pub.citations != null && <span class="pub-cite">被引 {pub.citations}</span>}
+    {
+      pub.links && pub.links.length > 0 && (
+        <span class="pub-links">
+          {pub.links.map((l) => (
+            <a href={l.href} target="_blank" rel="noopener noreferrer">
+              {l.label}
+            </a>
+          ))}
+        </span>
+      )
+    }
+  </div>
+  {
+    pub.topics && pub.topics.length > 0 && (
+      <ul class="pub-topics">
+        {pub.topics.map((t) => (
+          <li>{t}</li>
+        ))}
+      </ul>
+    )
+  }
+</li>

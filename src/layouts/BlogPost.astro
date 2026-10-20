@@ -1,0 +1,142 @@
+---
+import type { MarkdownHeading } from 'astro';
+import BaseLayout from './BaseLayout.astro';
+import { formatDate, readingTime, tagSlug, type Post } from '../utils/posts';
+
+interface Props {
+  post: Post;
+  headings: MarkdownHeading[];
+  prev: Post | null;
+  next: Post | null;
+}
+
+const { post, headings, prev, next } = Astro.props;
+const { title, description, pubDate, updatedDate, tags, draft } = post.data;
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+const minutes = readingTime(post.body);
+const hasMath = /\$/.test(post.body ?? '');
+---
+
+<BaseLayout title={title} description={description} type="article" math={hasMath}>
+  <div class="post-layout">
+    <article class="post">
+      <header class="post-header">
+        <h1>
+          {draft && <span class="draft-badge">草稿</span>}
+          {title}
+        </h1>
+        <div class="post-meta">
+          <span>发布于 <time datetime={pubDate.toISOString()}>{formatDate(pubDate)}</time></span>
+          {
+            updatedDate && (
+              <span>
+                更新于 <time datetime={updatedDate.toISOString()}>{formatDate(updatedDate)}</time>
+              </span>
+            )
+          }
+          <span>约 {minutes} 分钟读完</span>
+        </div>
+        {
+          tags.length > 0 && (
+            <ul class="tag-list">
+              {tags.map((tag) => (
+                <li>
+                  <a class="tag" href={`/tags/${tagSlug(tag)}/`}>
+                    #{tag}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          )
+        }
+      </header>
+
+      <div class="prose">
+        <slot />
+      </div>
+
+      {
+        (prev || next) && (
+          <nav class="post-nav" aria-label="文章导航">
+            {prev && (
+              <a class="prev" href={`/blog/${prev.id}/`}>
+                <span class="label">上一篇</span>
+                {prev.data.title}
+              </a>
+            )}
+            {next && (
+              <a class="next" href={`/blog/${next.id}/`}>
+                <span class="label">下一篇</span>
+                {next.data.title}
+              </a>
+            )}
+          </nav>
+        )
+      }
+    </article>
+
+    {
+      toc.length > 0 && (
+        <aside class="toc" aria-label="文章目录">
+          <div class="toc-inner">
+            <div class="toc-title">目录</div>
+            <ul>
+              {toc.map((h) => (
+                <li class={`depth-${h.depth}`}>
+                  <a href={`#${h.slug}`}>{h.text}</a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </aside>
+      )
+    }
+  </div>
+</BaseLayout>
+
+<script>
+  // 代码块复制按钮
+  document.querySelectorAll<HTMLPreElement>('.prose pre').forEach((pre) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'code-block';
+    pre.parentNode?.insertBefore(wrapper, pre);
+    wrapper.appendChild(pre);
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy-btn';
+    btn.textContent = '复制';
+    btn.addEventListener('click', async () => {
+      const code = pre.querySelector('code')?.innerText ?? pre.innerText;
+      try {
+        await navigator.clipboard.writeText(code);
+        btn.textContent = '已复制';
+      } catch {
+        btn.textContent = '复制失败';
+      }
+      window.setTimeout(() => (btn.textContent = '复制'), 1500);
+    });
+    wrapper.appendChild(btn);
+  });
+
+  // 目录高亮当前章节
+  const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.toc a'));
+  if (links.length > 0 && 'IntersectionObserver' in window) {
+    const map = new Map<Element, HTMLAnchorElement>();
+    for (const link of links) {
+      const el = document.getElementById(decodeURIComponent(link.hash.slice(1)));
+      if (el) map.set(el, link);
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          links.forEach((l) => l.classList.remove('active'));
+          map.get(entry.target)?.classList.add('active');
+        }
+      },
+      { rootMargin: '-80px 0px -70% 0px' },
+    );
+    map.forEach((_, el) => observer.observe(el));
+  }
+</script>

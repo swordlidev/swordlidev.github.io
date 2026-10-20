@@ -1,0 +1,35 @@
+---
+import { formatDate, tagSlug, type Post } from '../utils/posts';
+
+interface Props {
+  post: Post;
+  showDescription?: boolean;
+}
+
+const { post, showDescription = true } = Astro.props;
+const { title, description, pubDate, tags, draft } = post.data;
+---
+
+<li class="post-item">
+  <div class="post-item-head">
+    <a class="post-item-title" href={`/blog/${post.id}/`}>
+      {draft && <span class="draft-badge">草稿</span>}
+      {title}
+    </a>
+    <time datetime={pubDate.toISOString()}>{formatDate(pubDate)}</time>
+  </div>
+  {showDescription && description && <p class="post-item-desc">{description}</p>}
+  {
+    tags.length > 0 && (
+      <ul class="tag-list">
+        {tags.map((tag) => (
+          <li>
+            <a class="tag" href={`/tags/${tagSlug(tag)}/`}>
+              #{tag}
+            </a>
+          </li>
+        ))}
+      </ul>
+    )
+  }
+</li>

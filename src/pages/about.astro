@@ -1,0 +1,56 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import SocialLinks from '../components/SocialLinks.astro';
+import { PROFILE, RESEARCH_INTERESTS, SCHOLAR } from '../consts';
+---
+
+<BaseLayout title="关于" description={`关于 ${PROFILE.name}`}>
+  <header class="page-header">
+    <h1>关于我</h1>
+    <p>{PROFILE.title} @ {PROFILE.affiliation}</p>
+  </header>
+
+  <section class="section prose">
+    <p>
+      我是 <strong>{PROFILE.name}（{PROFILE.nameCn}）</strong>，{PROFILE.affiliation} 研究员，常驻 {PROFILE.location}。
+      目前的研究聚焦大语言模型（LLM）、多模态大模型（MLLM）、智能体（Agent）与强化学习（RL），
+      关注如何让模型更高效地理解多模态信息、更可靠地检索与推理，并在复杂任务中自主决策。
+    </p>
+    <p>
+      在进入大模型方向之前，我在计算机视觉领域有较长时间的积累，代表工作包括人脸检测
+      （<a href="https://arxiv.org/abs/1810.10220" target="_blank" rel="noopener noreferrer">DSFD</a>、ASFD）、
+      时序动作检测（DBG）与高效网络结构（EMO）等。
+    </p>
+  </section>
+
+  <section class="section">
+    <div class="section-header"><h2>研究方向</h2></div>
+    <ul class="tag-list tag-cloud">
+      {RESEARCH_INTERESTS.map((r) => <li><span class="tag">{r}</span></li>)}
+    </ul>
+  </section>
+
+  <section class="section prose">
+    <h2>近期主题</h2>
+    <ul>
+      <li><strong>搜索与 RAG 智能体</strong>：自演化搜索智能体（SE-Search）、检索增强生成（Disco-RAG）、AI Search 综述。</li>
+      <li><strong>多模态理解与评测</strong>：多模态大模型基准（MMAD、MLLM Benchmarks 综述）、视频时刻检索（LLaVA-MR）。</li>
+      <li><strong>强化学习与对齐</strong>：面向 LLM 的高效策略优化（TGPO）、奖励建模与角色扮演智能体。</li>
+      <li><strong>高效与蒸馏</strong>：高效多模态大模型综述、数据集蒸馏、知识蒸馏。</li>
+    </ul>
+  </section>
+
+  <section class="section prose">
+    <h2>学术指标</h2>
+    <p>
+      截至目前，引用约 {SCHOLAR.citations}，h-index {SCHOLAR.hIndex}，i10-index {SCHOLAR.i10Index}
+      （数据来自 <a href={SCHOLAR.profile} target="_blank" rel="noopener noreferrer">Google Scholar</a>，会随时间变化）。
+    </p>
+  </section>
+
+  <section class="section">
+    <div class="section-header"><h2>联系我</h2></div>
+    <p>欢迎就研究合作、交流或招聘实习与我联系：<a href={`mailto:${PROFILE.email}`}>{PROFILE.email}</a></p>
+    <SocialLinks />
+  </section>
+</BaseLayout>
