@@ -9,6 +9,7 @@ import { getPublishedPosts } from '../utils/posts';
 
 const posts = (await getPublishedPosts()).slice(0, 4);
 const selected = PUBLICATIONS.filter((p) => p.selected).sort((a, b) => b.year - a.year);
+const recentNews = NEWS.slice(0, 5);
 ---
 
 <BaseLayout>
@@ -39,7 +40,7 @@ const selected = PUBLICATIONS.filter((p) => p.selected).sort((a, b) => b.year - 
     <div class="section-header"><h2>近期动态</h2></div>
     <ul class="news-list">
       {
-        NEWS.map((n) => (
+        recentNews.map((n) => (
           <li>
             <time>{n.date}</time>
             <span set:html={n.html} />
