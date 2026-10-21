@@ -7,13 +7,14 @@ interface Props {
 }
 
 const { post, showDescription = true } = Astro.props;
-const { title, description, pubDate, tags, draft } = post.data;
+const { title, description, pubDate, tags, draft, badge } = post.data;
+const badgeText = badge ?? (draft ? 'Draft' : undefined);
 ---
 
 <li class="post-item">
   <div class="post-item-head">
     <a class="post-item-title" href={`/blog/${post.id}/`}>
-      {draft && <span class="draft-badge">Draft</span>}
+      {badgeText && <span class="draft-badge">{badgeText}</span>}
       {title}
     </a>
     <time datetime={pubDate.toISOString()}>{formatDate(pubDate)}</time>

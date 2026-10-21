@@ -1,10 +1,10 @@
 ---
 title: "在这里写标题"
 description: "一句话摘要，会显示在文章列表、SEO 和 RSS 里"
-pubDate: 2026-10-20
-updatedDate:
+pubDate: 2025-01-01
 tags: ["标签1", "标签2"]
 draft: true
+badge: "模板"
 ---
 
 > 使用说明（写完后可删除本段）：

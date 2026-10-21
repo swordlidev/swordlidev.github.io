@@ -11,6 +11,8 @@ const blog = defineCollection({
     updatedDate: z.coerce.date().optional(),
     tags: z.array(z.string()).default([]),
     draft: z.boolean().default(false),
+    // 可选：自定义角标文字（如“模板”），设置后覆盖默认的 Draft 角标
+    badge: z.string().optional(),
   }),
 });
 

@@ -11,10 +11,11 @@ interface Props {
 }
 
 const { post, headings, prev, next } = Astro.props;
-const { title, description, pubDate, updatedDate, tags, draft } = post.data;
+const { title, description, pubDate, updatedDate, tags, draft, badge } = post.data;
 const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 const minutes = readingTime(post.body);
 const hasMath = /\$/.test(post.body ?? '');
+const badgeText = badge ?? (draft ? 'Draft' : undefined);
 ---
 
 <BaseLayout title={title} description={description} type="article" math={hasMath} lang="zh-CN">
@@ -22,7 +23,7 @@ const hasMath = /\$/.test(post.body ?? '');
     <article class="post">
       <header class="post-header">
         <h1>
-          {draft && <span class="draft-badge">Draft</span>}
+          {badgeText && <span class="draft-badge">{badgeText}</span>}
           {title}
         </h1>
         <div class="post-meta">
