@@ -1,7 +1,7 @@
 ---
 title: "Qwen3-235B-A22B 64 卡全参 SFT 实战复盘：角色扮演 Agent"
 description: "在 64 卡 RoCE 集群上对 Qwen3-235B-A22B（MoE）做角色扮演全参 SFT 的完整复盘：环境、网络、数据、模型、权重转换、训练到踩坑七步链路，附实跑数字与参数。"
-pubDate: 2026-10-20
+pubDate: 2026-03-20
 tags: ["Qwen3", "SFT", "分布式训练", "MoE", "角色扮演", "实战"]
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（八）：Checkpoint、容错与弹性训练"
 description: "几百卡训几周，硬件一定会出故障。本文讲分布式 Checkpoint 为什么能换并行配置重载（ShardedTensor 的 global_offset）、异步存档、容错（ft_launcher + 心跳 + 分段超时抓“沉默 hang”）与弹性训练的区别，以及落到集群的实战 checklist。"
-pubDate: 2026-09-29
+pubDate: 2025-09-29
 tags: ["Megatron-LM", "分布式训练", "Checkpoint", "容错", "弹性训练"]
 ---
 

@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（二）：张量并行 TP 的内部原理"
 description: "张量并行把单层的权重矩阵切到多张卡。本文从矩阵乘法的行/列切分讲起，解释 Column/Row Parallel Linear、f 与 g 镜像算子，以及为什么 TP 必须绑定 NVLink 同机。"
-pubDate: 2026-09-09
+pubDate: 2025-09-09
 tags: ["Megatron-LM", "分布式训练", "张量并行", "LLM"]
 ---
 

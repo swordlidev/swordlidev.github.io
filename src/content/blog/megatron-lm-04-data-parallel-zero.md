@@ -1,7 +1,7 @@
 ---
 title: "Megatron-LM 分布式训练（四）：数据并行 DP 与分布式优化器（ZeRO）"
 description: "数据并行为什么会重复浪费显存？本文讲清混合精度下的 16 字节/参数构成、ZeRO 思想、Megatron 分布式优化器（reduce-scatter + all-gather）、梯度缓冲区 overlap，并厘清 ZeRO 各档与 Megatron / FSDP / DeepSpeed 的关系。"
-pubDate: 2026-09-16
+pubDate: 2025-09-16
 tags: ["Megatron-LM", "分布式训练", "数据并行", "ZeRO", "LLM"]
 ---
 
