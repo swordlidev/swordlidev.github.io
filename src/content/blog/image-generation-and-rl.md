@@ -1,7 +1,7 @@
 ---
 title: "图像生成与强化学习：从 DDPO 到 Flow-DPPO 的技术演进"
 description: "以“优化机制”为主轴梳理用 RL 对齐扩散/Flow 生成模型的技术谱系：扩散与 Flow Matching 的数学基础、为何 ODE 要转 SDE、GRPO 家族（Flow-GRPO/DanceGRPO/G²RPO/GRPO-Guard/Flow-DPPO/Flow-OPD）、DPO 与可微反传，以及 Flow-GRPO 与 LLM-GRPO 的本质区别。"
-pubDate: 2026-10-20
+pubDate: 2026-09-18
 tags: ["扩散模型", "强化学习", "GRPO", "Flow Matching", "生成模型", "综述"]
 ---
 
