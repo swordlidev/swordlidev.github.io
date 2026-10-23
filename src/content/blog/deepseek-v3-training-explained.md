@@ -1,7 +1,7 @@
 ---
 title: "DeepSeek-V3 实战解读：拆解真实训练脚本"
 description: "以 DeepSeek-V3 的真实 Megatron 训练脚本为样本，把每个训练参数对回背后的原理：MLA、细粒度 MoE、MTP、EP+ZeRO-3 的并行哲学；并横向对比 Qwen3-235B（两种 MoE 路线）、给出主流百亿/万亿模型并行地图，以及预训练→SFT→RL 的完整训练链路。"
-pubDate: 2025-05-15
+pubDate: 2025-10-15
 tags: ["DeepSeek-V3", "分布式训练", "MoE", "MLA", "Megatron-LM", "大模型"]
 ---
 

@@ -5,9 +5,9 @@ pubDate: 2026-02-24
 tags: ["verl", "vLLM", "推理引擎", "强化学习", "源码解读"]
 ---
 
-> **本文是《verl 源码解读》系列第 5 篇（终篇）**。前四篇讲清了“数据流怎么编排、数据怎么流转、算法怎么算”。本篇聚焦 verl 最有工程含量的部分：**生成（Rollout）如何用 vLLM/SGLang 加速，以及训练后的新权重如何同步回推理引擎**。对应代码在 `verl/workers/rollout/`。
+> **本文是《verl 源码解读》系列第 5 篇**。前四篇讲清了“数据流怎么编排、数据怎么流转、算法怎么算”。本篇聚焦 verl 最有工程含量的部分：**生成（Rollout）如何用 vLLM/SGLang 加速，以及训练后的新权重如何同步回推理引擎**。对应代码在 `verl/workers/rollout/`。
 >
-> 系列目录：[1 架构](/blog/verl-01-architecture/) · [2 HybridFlow](/blog/verl-02-hybridflow-single-controller/) · [3 DataProto](/blog/verl-03-dataproto/) · [4 PPO/GRPO](/blog/verl-04-ppo-grpo-core/) · **5 Rollout 混合引擎**
+> 系列目录：[1 架构](/blog/verl-01-architecture/) · [2 HybridFlow](/blog/verl-02-hybridflow-single-controller/) · [3 DataProto](/blog/verl-03-dataproto/) · [4 PPO/GRPO](/blog/verl-04-ppo-grpo-core/) · **5 Rollout 混合引擎** · [6 RL 算法详解](/blog/verl-06-rl-algorithms/)
 
 ## 1. 为什么 Rollout 要单独用一套引擎
 
