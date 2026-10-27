@@ -11,9 +11,6 @@ tags: ["AI搜索", "Web智能体", "RAG", "深度搜索", "多模态", "LLM", "�
 
 如下图所示，本文对近些年 AI 搜索相关的 80 余篇工作进行了深入回顾，重点涵盖：（1）基于文本的 AI 搜索、（2）Web 智能体、（3）多模态 AI 搜索与 Web 智能体、（4）基准评测、（5）AI 搜索软件与产品。更多细节可参考论文 *A Survey on AI Search with Large Language Models*。
 
-- GitHub：<https://github.com/swordlidev/Awesome-AI-Search>
-- Paper：<https://github.com/swordlidev/Awesome-AI-Search/blob/main/AI%20Search%20survey%20paper.pdf>
-
 ![近年来 AI 搜索和 Web 智能体相关工作概览](/images/ai-search-survey/image1.png)
 
 *图 1. 近年来 AI 搜索和 Web 智能体相关工作概览。*
