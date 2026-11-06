@@ -1,7 +1,7 @@
 ---
 title: "OpenClaw 源码解析（二）：Agent Loop 与工具执行引擎"
 description: "深入 packages/agent-core：一个不依赖任何 IO 的 Agent 主循环如何调 LLM、执行工具、防止死循环、在 turn 边界压缩上下文，并用统一事件流把一切暴露给上层。最后从算法研究员视角聊聊：这套 harness 对 Agent RL 的 rollout 设计意味着什么。"
-pubDate: 2026-09-15
+pubDate: 2026-06-15
 tags: ["OpenClaw", "Agent", "Agent Loop", "工具调用", "上下文压缩", "源码解读"]
 ---
 

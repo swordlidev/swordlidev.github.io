@@ -1,7 +1,7 @@
 ---
 title: "OpenClaw 源码解析（三）：插件系统与扩展机制"
 description: "182 个扩展、52 个内置技能、可替换的 Context Engine、双向 MCP 桥——OpenClaw 如何让这么多能力按需加载又互不拖累。系列收尾篇拆解激活规划器、带生命周期的插件 API、SKILL.md 快照、引擎隔离、工具结果中间件与子 Agent 的权限收缩。"
-pubDate: 2026-09-22
+pubDate: 2026-06-20
 tags: ["OpenClaw", "Agent", "插件系统", "MCP", "Skills", "源码解读"]
 ---
 

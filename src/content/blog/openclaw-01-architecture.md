@@ -1,7 +1,7 @@
 ---
 title: "OpenClaw 源码解析（一）：整体架构与核心数据流"
 description: "OpenClaw 把 182 个渠道与能力扩展、多家模型 provider 和一套可插拔的 Agent 运行时收进同一个 Gateway。本系列第 1 篇建立全局认知：代码怎么分层、一条消息从 Discord 进来到回复出去要经过哪七站、状态与安全怎么设计，以及算法研究员该从哪里读起。"
-pubDate: 2026-09-08
+pubDate: 2026-06-08
 tags: ["OpenClaw", "Agent", "源码解读", "系统架构", "TypeScript", "LLM 工程"]
 ---
 

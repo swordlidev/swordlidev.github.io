@@ -1,92 +1,80 @@
 ---
 title: "Harness Engineering：Agent 的「缰绳」工程"
-description: "Agent = Model + Harness。同一个模型换一套 harness，成功率可以差出几倍。本文自底向上拆解 harness 的六层：上下文管理（context rot / compaction / JIT 检索）、控制循环与停止条件、工具层（编辑格式实测、渐进披露、审批门）、子 Agent 隔离、记忆系统（写入提取、多因子检索、三代存储形态、技能库），最后简述 2026 上半年的 harness 自动进化。"
+description: "把 LLM 当 policy，Harness 就是它外面的 environment 与 rollout 基础设施。本文按六层骨架给出 Harness Engineering 的核心结论，并补上长时运行、主动调度、评测三件横切的事。"
 pubDate: 2026-06-22
-tags: ["Harness Engineering", "Agent", "Coding Agent", "Context Engineering", "Memory", "LLM 工程"]
+updatedDate: 2026-11-06
+tags: ["Harness Engineering", "Agent", "Coding Agent", "Context Engineering", "Memory", "Guardrails", "Agent 评测", "LLM 工程"]
 ---
 
-> **本文要解决的问题**：2026 年 2 月 "harness engineering" 这个词出现后，短短四个月就从一篇博客里的小标题变成了 Agent 工程的主线。它到底指什么？为什么不动权重、只改外壳就能带来十几个点的提升？每一层具体怎么实现——尤其是**记忆**？
+> **一句话**：把 LLM 当成 policy，Harness 就是包在它外面的 environment + rollout 基础设施——观测怎么给、动作空间怎么定、什么时候终止、由谁判定成功。权重决定 policy 的能力上限，harness 决定这个上限能被稳定兑现多少。
 >
-> 全文自底向上走一遍六层：**上下文 → 控制循环 → 工具与权限 → 子 Agent → 记忆 → 自动进化**。
+> 本文面向算法研究员，只讲**结论与机制**，实现细节和坑位清单尽量略去。全文走一遍六层（上下文 → 控制循环 → 工具与权限 → 子 Agent → 记忆 → 自动进化），再补三件横切的事（长时运行、主动调度、评测）。
 >
-> 说明：时间截至 2026 年 6 月。论文和厂商数字均为作者 / 厂商自报，代码为示意实现。
+> 三条贯穿全文的直觉：**① 先怀疑管道，再怀疑模型**——Agent 出错多半是上下文装错了或工具 schema 写糊了；**② 别过早工程化**——从最小循环起步，按需加记忆、技能、权限；**③ 上下文窗口不是无限的**——没组装进 prompt 的信息，对模型来说不存在。
+>
+> 说明：时间截至 2026 年 11 月。论文和厂商数字均为作者 / 厂商自报，代码为示意实现。
 
 ## 一、什么是 Harness
 
-**Agent = Model + Harness**
+**Agent = Model + Harness**。Harness 指包裹在模型外部的一切运行时基础设施：上下文管理、控制循环、工具调度、权限与沙箱、错误恢复、记忆与 session 持久化。模型负责"想"，harness 决定它**看到什么、能做什么、做错了怎么办、什么时候停**。
 
-Harness（马具 / 缰绳）指包裹在模型外部的一切运行时基础设施：上下文管理、指令组织、控制循环、工具调度、权限与沙箱、错误恢复、记忆系统、session 持久化。模型负责"想"，harness 决定它**看到什么、能做什么、做错了怎么办、什么时候停**。
-
-### 1.1 这个词从哪来
-
-- **2026-02-05**，Mitchell Hashimoto 在《My AI Adoption Journey》里把自己的做法命名为 harness engineering："每当发现 Agent 犯了一个错，就花时间工程化一个方案，让它再也不犯这个错。"落地形式有两种：更好的隐式提示（`AGENTS.md`），以及程序化工具。
-- **2026-02-11**，OpenAI 发布《Harness engineering: leveraging Codex in an agent-first world》：一个团队花五个月做出一个内部产品，**人工手写代码 0 行**。早期进度慢不是因为 Codex 能力不够，而是环境没被定义清楚。工程师的工作于是变成不断追问："Agent 缺什么能力？怎么把它以清晰、可执行的方式交给 Agent？"
+这个词 2026 年 2 月由 Mitchell Hashimoto 命名，随后 OpenAI 用它描述"五个月、人工手写代码 0 行"的 Codex 实践。它和另外两个概念是包含关系：
 
 | | Prompt Engineering | Context Engineering | Harness Engineering |
 |---|---|---|---|
-| 优化对象 | 一次调用的输入文本 | 每一步上下文窗口里放什么 | 包裹模型的整个运行时系统 |
-| 时间尺度 | 单轮 | 单个 session 内的多步 | 跨 session、跨任务、持续迭代 |
-| 典型手段 | 措辞、few-shot、CoT | 检索、压缩、裁剪、注入 | 控制循环、工具设计、权限、记忆、评估与回归 |
+| 优化对象 | 一次调用的输入 | 每步窗口里放什么 | 整个运行时系统 |
+| 时间尺度 | 单轮 | 单 session 多步 | 跨 session、持续迭代 |
 | 出错时怎么修 | 改 prompt | 改上下文策略 | 改系统，让同类错误不再发生 |
 
-三者是包含关系而不是替代关系：harness 里仍然有 prompt 和 context，只是它们变成了系统的组件之一。
-
-### 1.2 为什么突然重要
+### 1.1 为什么突然重要
 
 几组"同一个模型、只改 harness"的数据：
 
 | 实验 | 只改了什么 | 结果 |
 |------|-----------|------|
 | Can Bölük 的 hashline 实验（2026.02） | 文件编辑工具的格式 | 16 个模型里 14 个变好；Grok Code Fast 1：**6.7% → 68.3%** |
-| Anthropic 上下文管理（2025.09） | context editing + memory tool | 内部 agentic search 评测 **+39%**；100 轮搜索 token 降 **84%** |
+| Anthropic 上下文管理（2025.09） | context editing + memory tool | 内部 agentic search **+39%**；100 轮搜索 token 降 **84%** |
 | AHE（arXiv:2604.25850） | 自动演化 10 轮 harness | Terminal-Bench 2：69.7% → **77.0%** |
 | RHO（arXiv:2606.05922） | 一轮无标签的回顾式优化 | SWE-Bench Pro：59% → **78%** |
 
-第一条最值得细看，细节见 5.2——只换一种"告诉模型改哪一行"的方式，十六个模型里十四个变好。
-
-一个工具格式为什么能带来十倍差距？因为长任务的成功率是**连乘**的。设任务需要 $n$ 次编辑，每次成功落地的概率为 $p$：
+一个工具格式为什么能带来十倍差距？因为长任务成功率是**连乘**的。设任务需要 $n$ 次编辑、每次成功落地的概率为 $p$：
 
 $$
 P(\text{任务成功}) \approx p^{\,n}
 $$
 
-$n = 20$ 时，$p = 0.90$ 只剩 12%，$p = 0.99$ 则有 82%。模型"想对了但没改对"——复述原文差一个空格、diff 行号偏一行——在 harness 层面就是失败，还会把后续步骤带进错误状态。harness 优化的大部分收益，来自把这类**非智力性失败**压下去。
+$n = 20$ 时，$p = 0.90$ 只剩 12%，$p = 0.99$ 则有 82%。模型"想对了但没改对"（复述差一个空格、行号偏一行）在 harness 层面就是失败，还会把后续步骤带进错误状态。**大部分收益来自压掉这类非智力性失败，而不是提升推理能力。**
 
 **结论：模型决定上限，Harness 决定底线。**
 
-## 二、六层架构与一个最小实现
+### 1.2 三个易混词与两代 Agent
 
-```text
-┌─────────────────────────────────────────┐
-│  Layer 6: Self-Evolution                │ ← Harness 改进自身
-├─────────────────────────────────────────┤
-│  Layer 5: Memory & Persistence          │ ← 跨 session 的经验累积
-├─────────────────────────────────────────┤
-│  Layer 4: Multi-Agent Orchestration     │ ← 子 Agent 与上下文隔离
-├─────────────────────────────────────────┤
-│  Layer 3: Tool & Permission             │ ← 工具注册、沙箱、审批策略
-├─────────────────────────────────────────┤
-│  Layer 2: Query Loop (Agent Loop)       │ ← 控制循环、停止条件、错误恢复
-├─────────────────────────────────────────┤
-│  Layer 1: Prompt & Context              │ ← 系统指令、上下文工程
-└─────────────────────────────────────────┘
-```
+| 术语 | 决定什么 | 例子 |
+|---|---|---|
+| **Harness** | Agent **选择**做什么 | Claude Code、Codex CLI |
+| **Framework** | 帮你造 harness 的组件 | LangGraph、Strands、AG2 |
+| **Runtime** | Agent **物理上能**做什么 | Docker、systemd、云端托管 |
+
+口诀：Framework 造 harness，Runtime 托管 harness，**harness 才是决定行为的那段逻辑**。Runtime 决定能不能读某个文件，harness 决定会不会去读。
+
+顺带说清"Agent"的含义变化：2023 年的 Agent 是「模型 + 一个工具」，无状态、单轮、跑在宿主进程里；现在的 Agent 要有动态工具系统、跨 session 记忆、优先级上下文组装、错误恢复、沙箱和权限模型。**差距全在 harness 层**——没有它，你只有一个能调函数的聊天机器人。
+
+## 二、六层骨架与一个循环
 
 | 层 | 要回答的问题 | 典型失效 |
 |---|---|---|
-| L1 Prompt & Context | 模型这一步应该看到什么 | 关键信息被挤出窗口；无关内容稀释注意力 |
-| L2 Query Loop | 下一步做什么、什么时候停 | 死循环；过早宣布任务完成 |
-| L3 Tool & Permission | 能调什么、在哪执行、谁来批准 | 工具格式导致执行失败；越权操作 |
-| L4 Multi-Agent | 怎么拆、怎么并行、怎么汇总 | 重复劳动；信息在层层摘要中丢失 |
-| L5 Memory | 跨 session 记住什么 | 同一个坑反复踩；错误经验污染记忆 |
-| L6 Self-Evolution | harness 怎么改进自己 | 过拟合评测集；绕过安全约束 |
+| L1 Prompt & Context | 这一步应该看到什么 | 关键信息被挤出窗口 |
+| L2 Query Loop | 下一步做什么、何时停 | 死循环；过早宣布完成 |
+| L3 Tool & Permission | 能调什么、谁来批准 | 工具格式导致执行失败；越权 |
+| L4 Multi-Agent | 怎么拆、怎么并行、怎么汇总 | 重复劳动；摘要丢信息 |
+| L5 Memory | 跨 session 记住什么 | 同一个坑反复踩 |
+| L6 Self-Evolution | harness 怎么改进自己 | 过拟合评测集 |
 
-把六层剥到只剩骨头，一个 Agent 就是二十几行：
+另有三个横切关注点不属于任何单层，但不处理就上不了生产：**长时运行的上下文生命周期**（八）、**主动调度**（九）、**评测**（十）。
+
+把六层剥到只剩骨头，一个 Agent 就是二十几行。骨架的学名是 **ReAct**（Reason + Act）：推理 → 调工具 → 观察结果 → 再循环，直到不再请求工具。从学习脚本到 Claude Code，内核都是同一个循环，区别全在循环**外围**。
 
 ```python
-"""最小 Agent Harness：act → observe 循环"""
-
-
 class MinimalHarness:
     def __init__(self, model, tools, system_prompt: str, max_turns: int = 20):
         self.model, self.tools = model, tools
@@ -100,583 +88,232 @@ class MinimalHarness:
         for _ in range(self.max_turns):
             response = self.model.chat(messages, tools=self.tools.schemas())
             messages.append(response.to_message())  # 带 tool_calls 的消息要先进历史
-
             if not response.tool_calls:
-                return response.content            # 没有工具调用，视为完成
-
+                return response.content
             for call in response.tool_calls:
                 messages.append({
                     "role": "tool",
                     "tool_call_id": call.id,
                     "content": str(self.tools.execute(call.name, call.args)),
                 })
-
         return "Max turns reached"
 ```
 
-一个容易漏掉的细节：追加工具结果之前必须先把带 `tool_calls` 的 assistant 消息放进历史，否则 `tool` 消息找不到对应调用，多数 API 直接报错。
+一个易漏的细节：**追加工具结果前必须先入 assistant 消息**，否则多数 API 直接报错。
 
-这段代码能跑，但离可用的 harness 还差几乎全部工作量——缺的每一项正好对应一层，也就是后面几节的内容：
+这段代码能跑，但离可用还差几乎全部工作量——缺的每项正好对应一层：上下文组装与压缩（三）、完成判定与错误恢复（四）、工具格式与权限（五）、上下文隔离（六）、记忆（七）、跨 session 状态与验收（八）、自动触发（九）、评测与全链路 trace（十 / 十一）。
 
-| 缺什么 | 对应层 | 不补会怎样 | 见 |
-|---|---|---|---|
-| 上下文压缩 / 重置 | L1 | 长任务把上下文窗口撑爆 | 三 |
-| 完成判定、错误恢复 | L2 | "没有工具调用"就当完成；工具一抛异常就中断 | 四 |
-| 工具格式、权限、沙箱、审批 | L3 | 编辑落不了地；任何调用都直接执行 | 五 |
-| 上下文隔离 | L4 | 探索的脏数据全留在主上下文里 | 六 |
-| 记忆 | L5 | 每个 session 都从零开始 | 七 |
-| Trace | 全层 | 出错无法归因，也就无法自动优化 | 九 |
+## 三、L1 上下文：本质是观测设计
 
-## 三、L1 上下文：注意力预算
+**结论：找最小的高信噪比 token 集合。** Context rot 是共识——窗口里 token 越多，模型准确回忆其中信息的能力越差（$n$ 个 token 产生 $n^2$ 对注意力关系；训练数据短序列占多数；位置插值损失位置精度）。注意"最小"不等于"最短"，信息不足同样失败。
 
-### 3.1 Context Rot
+**检索策略**：预检索（先 embedding 灌进去）快但索引会过期、捞错就污染上下文；即时检索（上下文只留路径 / 查询语句，运行时用工具取）慢一点，但上下文干净，而且**路径和命名本身携带信息**——`tests/test_utils.py` 和 `src/core_logic/test_utils.py` 含义完全不同，这些线索在"切块灌进向量库"时会丢掉。Claude Code 是混合策略：`CLAUDE.md` 前置注入，具体文件靠 `glob` / `grep` 当场取。
 
-Anthropic 在《Effective context engineering for AI agents》（2025.09）里讲得最清楚：**上下文窗口里 token 越多，模型准确回忆其中信息的能力越差**。各模型退化曲线陡缓不同，但都存在。这不是断崖式失效而是性能梯度——长上下文下模型依然能用，只是检索精度和长程推理变弱。机制上有三条原因：$n$ 个 token 产生 $n^2$ 对注意力关系，越长越被摊薄；训练数据里短序列远多于长序列；位置编码插值能撑长度但损失位置精度。
+**组装 = 带优先级的装箱**。每轮按 `System prompt → 活跃工具 schema → 任务指令与完成标准 → 记忆摘要 → 注入文件 → 近期对话 → 更早对话` 的顺序装，空间不足从下往上丢。三条硬规则：**给回复留 reserve**（塞到 100% 模型没地方回话）、优先级最高的几块**宁可截断也不整段丢**、**每一轮重新组装**（一次组装后不更新，第一次工具调用之后模型就在用过时信息推理）。
 
-由此推出贯穿整层的原则：**找到能最大化目标达成概率的、最小的高信噪比 token 集合**。注意"最小"不等于"最短"，信息不足同样会失败。
+**压缩不是可选项**。128K 扣掉固定开销剩约 11.9 万给对话，一轮带工具结果的编码任务平均吃 1–3K token，**三四十轮就摸到阈值**，且应在 70% 左右触发、别等撞墙。三道防线：自动衰减（只留最近 N 轮）、阈值压缩（便宜模型摘要早期轮次）、主动摘要（超长任务定期打 checkpoint）。生产里最实用的是**滑动窗口 + 滚动摘要**。最轻最安全的压缩是**工具结果清理**——历史深处的原始返回值模型基本不看第二遍。
 
-### 3.2 预检索 vs 即时检索
+**长程技术三选一**：compaction（摘要重开窗口，会丢"后来才显重要"的细节）、结构化笔记（状态写到窗口外文件，笔记会过期）、子 Agent（干净窗口做脏活，只回传摘要）。Claude Code 的 compaction 值得照搬：保留架构决策、未解决的 bug、实现细节，丢弃冗余工具输出。
 
-| | 预检索（pre-retrieval） | 即时检索（just-in-time） |
+最后一条边界：**`AGENTS.md` 里写的是请求，不是约束**。"禁止直接 push main"只写在 Markdown 里只是概率性保证，真正的约束在分支保护、CI 和工具权限（5.3）里。分层 Prompt 的顺序（System → Project → Task → Dynamic）同时也是 prompt caching 的友好顺序。
+
+## 四、L2 控制循环：终止条件与恢复策略
+
+**完成判定必须外部可验证。** `if not tool_calls: return` 最不可靠，Agent 最常见的失败就是过早宣布胜利。Anthropic 的做法是把完成标准**外置成结构化文件**：每个 session 先读清单、挑一个未完成项、做完更新状态——"完成"从模型的一句自述变成清单上的布尔值。所有出口：轮次 / 成本上限、清单全绿且测试通过、连续相同工具调用（卡死）、人类中断。`max_turns` 是最不该缺席的一条，没有它混乱的模型会无限循环烧钱。
+
+**模型本身就是错误处理器。** 传统程序里未处理的错误让进程崩溃；agentic 系统里，只要把错误清晰呈现给模型，它就能适应、重试或换路。harness 的工作是**分类 → 套策略 → 只在自动恢复耗尽时升级给人**：
+
+| 类别 | 例子 | 恢复方式 |
 |---|---|---|
-| 做法 | 推理前用 embedding 把相关内容塞进上下文 | 上下文只留轻量标识符（路径、查询语句），运行时用工具取 |
-| 优点 | 快，延迟可预测 | 上下文干净；元数据本身就是信号 |
-| 缺点 | 索引会过期；捞错了污染上下文 | 更慢；工具不好时会乱逛、浪费上下文 |
+| **瞬时** | 超时、限流、429 / 503 | 指数退避 + **抖动**重试 |
+| **永久** | 文件不存在、权限拒绝 | 回喂给模型，尝试替代方案 |
+| **模型** | 畸形调用、幻觉函数名 | 带 schema 纠正重新 prompt |
+| **资源** | OOM、磁盘满、token 超限 | checkpoint 并升级给人 |
 
-Claude Code 是混合策略的典型：`CLAUDE.md` 前置注入，具体文件靠 `glob` / `grep` 当场取，绕开了"建索引、索引过期"的整个问题。即时检索还有个常被忽略的好处：**路径和命名本身携带信息**——`tests/test_utils.py` 和 `src/core_logic/test_utils.py` 含义完全不同，文件大小暗示复杂度，时间戳暗示相关性。这些线索在"切块灌进向量库"的做法里会被丢掉。
+抖动不是细节：没有它多个 Agent 会形成同步重试的惊群。只对瞬时错误重试，对"文件不存在"重试三次纯浪费。配套三件事：优雅降级（把 fallback 链和最终错误一起给模型）、人在回路四档（AUTO / INFORM / CONFIRM / BLOCK）、长任务每 3–5 轮原子写入 checkpoint。
 
-### 3.3 三种长程技术
+**黄金原则：错误永远作为工具结果回喂，绝不在循环里抛异常。** 被吞掉的异常会变成静默失败，而静默失败会被模型解释成"成功"，接着幻觉出一个完成结果。
 
-当任务总 token 量超过上下文窗口（大型重构、长时间研究）：
+剩下四条边界：大输出先截断再追加、保留并行工具调用（强行串行会引入本不存在的顺序依赖）、流式输出、assistant 消息先入历史。
 
-| 技术 | 做法 | 适合 | 风险 |
-|------|------|------|------|
-| **Compaction** | 接近上限时总结历史，用摘要重开窗口 | 需要大量来回、维持对话流 | 压太狠会丢掉"后来才显出重要性"的细节 |
-| **结构化笔记** | 定期把状态写到窗口外的文件再读回来 | 有明确里程碑的迭代开发 | 笔记本身会过期、会矛盾 |
-| **子 Agent** | 子 Agent 在干净窗口里做脏活，只回传摘要 | 可并行的研究与分析 | 摘要丢信息；成本高（见第六节） |
+## 五、L3 工具与权限：本质是动作空间
 
-Claude Code 的 compaction 值得照搬：总结时**保留架构决策、未解决的 bug、实现细节**，丢弃冗余工具输出，然后带着摘要 + 最近访问的 5 个文件继续。调提示词的顺序是先最大化召回，再提升精确率。
+**地基是一个分离：模型只看 schema，harness 负责执行。** 模型看不到实现代码，于是你可以在它不知情的情况下改实现、限行为、加权限检查——这正是权限层能存在的前提。由此得出 `dispatch` 的铁律：**永远返回字符串，出错也不例外**。返回 dict 会让下游序列化崩掉，抛异常会中断循环；而把错误当成给模型的一条信息（`Error: File not found: /x`），它自己会去 `glob` 找正确路径。
 
-最轻、最安全的压缩形式是**工具结果清理**——躺在历史深处的原始返回值，模型基本不需要再看第二遍。Anthropic 把它做成了平台能力 `clear_tool_uses`，按输入 token 数触发、保留最近 N 次调用。
+工具设计的结论很集中：**描述质量几乎决定一切**（说清做什么、输出格式、约束、给例子）；**让非法输入不可表达**（枚举优于自由文本）；**返回值为模型优化**（分页、截断、只回关键字段）；**警惕工具集膨胀**（人类都说不清该用哪个工具，Agent 不可能更好）；**复杂能力来自简单工具的组合**而非巨型单体。MCP 的价值是把工具实现与 harness 解耦，把 N×M 集成压成 N+M。
 
-### 3.4 分层 Prompt 与 AGENTS.md
+### 5.1 最硬的一组证据：编辑格式
+
+Can Bölük 的《The Harness Problem》（2026.02）只改 edit 工具、横测 16 模型 × 3 格式。三类主流格式（`apply_patch` / `str_replace` / 整文件重写）的共同病根是**都要求模型完美复现它看过的内容**——既浪费上下文，又把成败压在精确召回上。
+
+hashline 换成给每行附 2–3 字符的内容哈希，编辑时只引用标签（"替换 `2:f1`"）。两个性质：不必复现原文；自带乐观并发校验（文件被改过哈希就不匹配，编辑在污染文件前被拒）。
+
+结果（作者自报）：patch 对几乎所有模型最差；hashline 在 **14/16** 个模型上更优，平均 **+15 分**，且**越弱的模型收益越大**——Grok Code Fast 1 从 6.7% 到 68.3%。两个反例（GPT-5.2 Codex 只 +4.6 且 token 反涨、DeepSeek V3.2 负增益）说明原因大概是训练阶段被 patch 格式偏置过。**结论：编辑格式是模型特定的，没有通用最优**——这等价于说 harness 与 policy 是 jointly tuned 的，只换模型不换 harness 往往掉点。
+
+数字要打折看：基准是 React 代码库注入可逆变异自动生成的，作者就是 hashline 实现方。但"patch 失败率能到 50%"这个量级和各家 issue 区的抱怨对得上。
+
+### 5.2 工具太多：渐进披露
+
+工具 schema 每一轮都在上下文里，十几个 MCP server 就能吃掉几万 token。三档做法：十几个以内全常驻；几十到上百个用工具检索或**技能菜单 + `load_skill` / `unload_skill`** 按需展开；工具极多时改成代码执行（MCP server 暴露成可 `import` 的 API，中间结果不进上下文，Anthropic 报告某工作流 15 万 → 2 千 token）。
+
+算账：8 技能 / 约 60 工具的系统，全量预加载约 12,000 token/轮，菜单 + 加载 2 个约 2,550——**每轮省 78%**，30 轮省约 28 万。另一个理由是**模型表现**：schema 超过二十来个，选择质量明显下降。
+
+这里区分两个概念：**工具是单个函数，技能是一组相关工具 + 一份 `SKILL.md`（何时用、约束、示例）+ 行为规则**。由此引出全文最重要的架构哲学——**薄 harness + 厚技能**：harness 只保留通用引擎（循环、上下文组装、注册表），所有领域知识放进可移植、可独立测试、可组合的技能；**加能力靠加技能，而不是改内核**。
+
+### 5.3 权限：写在代码里，不是 prompt 里
+
+逻辑链条是「模型生成文本 → 文本含工具调用 → harness 执行」，所以**任何能影响模型输出的东西都能影响 harness 行为**——包括它读到的文件、网页、用户消息。这就是 prompt 注入。
+
+**最关键的认知：在 prompt 里写"不要删文件"只是建议，一次注入就能覆盖。** 真正的权限控制是代码里的闸门，对每个调用四选一：**放行 / 拒绝（错误回喂模型）/ 改写（路径限制到安全目录）/ 转人工**。分工上，**权限由确定性策略决定，置信度只决定"要不要再想想"**：只读自动过 → 写自动过并记日志 → shell / 网络需人工 → 删除 / `git push` / 对外发消息始终要明确批准。三档模型按风险挑：白名单、黑名单、分级审批。外部来源的内容还要截断并用 `<tool_result>` 包裹，让模型能区分"指令"和"不可信数据"。
+
+沙箱管的是"调了以后能祸害多大范围"：**模型应该感觉不受限制，执行环境恰恰相反**。开发用 Docker、生产多租户用 Firecracker（KVM 边界，容器逃逸影响所有租户）。用 Docker 时真正的限制**不在 Dockerfile，在 `docker run` 参数**：`--rm`、非 root、内存 / CPU / `--pids-limit` 上限、`--read-only`、`--tmpfs /tmp:noexec`、`--cap-drop ALL`、`--network none`；需要联网时用 iptables 白名单。核心原则：**Agent 的代码执行永远不该访问宿主的文件系统、网络和进程空间，凭证绝不进沙箱**。
+
+### 5.4 审批疲劳与盲视推理
+
+手动弹窗会失效：约 **93% 的审批请求被下意识批准**，这是人类注意力的极限而非 UX 问题。第四条路是**让一个独立模型当审核者**，双层防御且互不依赖：**输入层**扫描每个进入 Agent 的工具结果（挡注入），**输出层**在危险调用执行前审动作。成本靠三层决策流收敛——白名单 → 项目内编辑（`git diff` 兜底）→ 只有 shell / 网络 / 外部 API 才跑 classifier，且先用单 token 快筛、可疑才进完整 CoT。
+
+**最承重的设计：classifier 对 Agent 的推理过程盲视。** 它只看用户消息、工具调用、工具结果，不看 thinking token。因为 Agent 能为任何事找借口：
 
 ```text
-System prompt      ← 角色、通用原则、输出格式（最稳定，适合缓存）
-  └ Project        ← AGENTS.md / CLAUDE.md：项目约束、工具约定
-      └ Task       ← 当前任务描述与完成标准
-          └ Dynamic ← 本轮检索到的文件、工具结果、笔记（最易变）
+用户：帮我清一下测试环境的脏数据
+Agent（推理）：把整个订单库删了最省事，反正应该没人用。
+Agent（工具调用）：DROP TABLE orders;
 ```
 
-越靠上越稳定，正好也是 prompt caching 的友好顺序。`AGENTS.md` 就是把 Hashimoto 的原则落到文件上——**每一条规则都对应一次真实发生过的错误**：
-
-```markdown
-# AGENTS.md
-
-## 项目约束
-- 所有代码修改必须有对应测试
-- 禁止直接 push main 分支
-
-## 工具权限
-- 允许: read, write, exec(sandbox), web_search
-- 需审批: git push, deploy, database write
-
-## 上下文注入
-- 修改 API 层代码前先读 docs/api-spec.md
-
-## 错误恢复
-- 测试失败 → 自动读取错误日志 → 最多重试 3 次
-```
-
-一条容易被忽视的边界：**AGENTS.md 里写的是请求，不是约束**。"禁止直接 push main"只写在 Markdown 里，就只是一个概率性保证。OpenAI 的做法是文档约束不住时把规则"升级"成代码：
-
-| 规则 | 只写进 AGENTS.md 够不够 | 应由哪一层强制 |
-|---|---|---|
-| 修改 API 前先读 spec | 够 | — |
-| Python 代码必须过 ruff | 不够 | pre-commit / CI |
-| 禁止直接 push main | 不够 | 分支保护 + 工具权限（5.4） |
-| 数据库写操作需审批 | 不够 | 审批门（5.4） |
-
-## 四、L2 控制循环
-
-第二节那个 `for _ in range(max_turns)` 能转起来，但它既不知道什么时候算做完，也不知道出错了怎么继续。这两件事就是这一层的全部内容。
-
-### 4.1 停止条件
-
-`if not response.tool_calls: return` 是最省事也最不可靠的完成判定——Agent 最常见的失败之一就是**过早宣布胜利**。Anthropic 的做法是把完成标准**外置成文件**：从任务规格生成结构化功能清单，每个 session 先读清单、挑一个未完成项、做完后更新状态。"完成"于是从模型的一句自述变成清单上的布尔值。
-
-```python
-def should_stop(state) -> tuple[bool, str]:
-    if state.turn >= state.max_turns:
-        return True, "turn_limit"
-    if state.cost_usd >= state.budget_usd:
-        return True, "budget"              # 轮数和成本两个上限都要有
-    if state.checklist.all_done() and state.tests_pass:
-        return True, "verified_complete"   # 外部可验证的完成
-    if state.no_progress_turns >= 3:
-        return True, "stalled"             # 连续几轮无状态变化 → 死循环
-    return False, ""
-```
-
-`no_progress_turns` 可以对"文件系统快照 + 最近几次工具调用"做哈希来判断：反复读同一个文件、反复跑同一条失败命令，是很典型的卡死形态。
-
-### 4.2 错误恢复
-
-工具抛异常不该中断循环，而应该变成一条**模型能读懂**的观察：发生了什么、为什么、下一步可以做什么。
-
-```python
-def safe_execute(tools, call):
-    try:
-        return {"ok": True, "output": tools.execute(call.name, call.args)}
-    except SchemaError as e:
-        return {"ok": False, "error": str(e), "hint": tools.schema_of(call.name)}
-    except TimeoutError:
-        return {"ok": False, "error": "timeout",
-                "hint": "narrow the scope, e.g. run a single test file"}
-```
-
-两条经验：**参数错误时把 schema 回灌**，比一句 "invalid arguments" 有用得多；**同一个报错连续三次就换策略**（换工具、重新规划或交给人），继续重试几乎不会成功。按 Hashimoto 的原则，这类反复出现的错误应该被写进 `AGENTS.md` 或做成工具。
-
-## 五、L3 工具与权限
-
-工具是 harness 里**收益密度最高**的一层：模型的能力通过工具这个窄口才能作用到世界上，口的形状决定了多少能力能通过去。
-
-### 5.1 四条设计原则
-
-- **自包含、容错、用途明确**，参数描述无歧义。
-- **参数要让非法输入不可表达**：能用枚举就不要用自由文本，能让调用方传路径就不要传"文件的大致位置"。校验失败的成本是一整轮往返。
-- **返回值为模型优化，不是为程序优化**。分页、截断、只回关键字段都是 harness 设计的一部分；一个返回 50 万字符 JSON 的工具等于在烧注意力预算。
-- **警惕工具集膨胀、职责重叠**，这是最常见的失败。Anthropic 给的判据很好用：如果人类工程师都说不清该用哪个工具，Agent 不可能做得更好。
-
-### 5.2 案例：编辑工具的格式
-
-这是目前最有说服力的一组证据。Can Bölük 的《The Harness Problem》（2026.02.12）只改 edit 工具，横测 16 个模型 × 3 种格式。先看三类主流格式各自的毛病：
-
-| 格式 | 代表 | 机制 | 问题 |
-|------|------|------|------|
-| **apply_patch** | OpenAI Codex | 传一段 diff 字符串，无结构化 schema，靠模型严格遵守规则 | 换到别的模型上失败率暴涨——Grok 4 的 patch 失败率 **50.7%**，GLM-4.7 **46.2%** |
-| **str_replace** | Claude Code 等多数工具 | 找到旧文本精确替换 | 必须**逐字符复现**，含空白与缩进；多处匹配直接拒绝。"String to replace not found" 在 GitHub 上有专门的 megathread |
-| **整文件重写** | Cursor（另训模型做 merge） | 直接输出整个新文件 | token 贵；但 Cursor 自己承认 400 行以下文件它优于 diff |
-
-共同的病根：**都要求模型完美复现它看过的内容**。既浪费上下文，又把成败压在精确召回上。模型"想对了但没改对"，用户却去怪模型。
-
-hashline 的做法是换一种定位方式——read 和 grep 时给每行附一个 2–3 字符的内容哈希：
-
-```text
-1:a3|function hello() {
-2:f1|  return "world";
-3:0e|}
-```
-
-编辑时只引用标签："替换 `2:f1`"、"在 `3:0e` 之后插入"。两个性质很关键：
-
-- **不必复现原文**，只需复现一个伪随机标签——而能复述出标签基本就说明它知道自己在改哪里；
-- **自带乐观并发校验**：文件在上次 read 之后被改过，哈希就不匹配，编辑在污染文件之前就被拒绝。
-
-结果（作者自报）：patch 对几乎所有模型都是最差格式；hashline 在 **14/16** 个模型上优于 patch，平均 **+15 分**，而且**越弱的模型收益越大**——Grok Code Fast 1 +64.6 分（6.7% → 68.3%），MiniMax M2.1 成绩翻倍以上。token 也跟着降，因为不再陷入重试循环：Grok 4 Fast 输出 token **−61%**，Grok Code Fast 1 −49%。
-
-两个反例同样重要：**GPT-5.2 Codex** 只 +4.6 分且 token 反涨 26%，**DeepSeek V3.2** 是唯一负增益（−5 分）。原因大概是它们在训练阶段就被 patch 格式偏置过。这正好印证了那条结论：**编辑格式是模型特定的，没有通用最优**。旁证也一致——Aider 的基准里仅格式变化就让 GPT-4 Turbo 从 26% 提到 59%，而 JetBrains 的 Diff-XYZ 结论是没有任何单一格式能跨模型通吃。
-
-数字要打折看：基准是在 React 代码库上注入可逆变异（运算符互换、off-by-one、去掉 `?.` 等）自动生成的，3 轮 × 180 个任务，和真实 issue 的分布不同；而且作者就是 hashline 的实现方。但"patch 失败率能到 50%"这个量级，和各家工具 issue 区里的抱怨是对得上的。
-
-### 5.3 工具太多怎么办：渐进披露与代码执行
-
-工具定义本身就要占上下文。接上十几个 MCP server，光 schema 就能吃掉几万 token——而且这部分**每一轮都在**。
-
-Anthropic 在《Code execution with MCP》（2025.11）里给的解法是把工具从"直接调用"改成"写代码调用"：MCP server 暴露成代码 API，模型按需 `import` 自己要用的那几个，中间结果留在执行环境里不进上下文。报告的效果是某个工作流从 **15 万 token 降到 2 千**（厂商自报）。
-
-这和 7.5 节 `SKILL.md` 的渐进披露是同一个思路：**工具清单常驻、工具细节按需展开**。差别只在展开的载体是文件还是代码模块。实践上有三档可选：
-
-| 做法 | 适合 |
-|------|------|
-| 全部工具定义常驻 | 工具数在十几个以内 |
-| 工具检索：先按任务挑一批再注入定义 | 几十到上百个工具 |
-| 代码执行：工具变成可 import 的 API | 工具很多、或中间结果体积大 |
-
-### 5.4 审批门与置信度路由
-
-常见写法是让模型判断要不要审批，置信度高就直接执行——这把**授权**交给了模型。更稳妥的分工是：**权限由确定性策略决定，置信度只决定"要不要再想想"**。
-
-```python
-from enum import Enum
-
-
-class Risk(Enum):
-    READ = 0      # 只读
-    SANDBOX = 1   # 只影响沙箱
-    EXTERNAL = 2  # 影响外部世界
-
-
-TOOL_RISK = {
-    "read_file": Risk.READ, "grep": Risk.READ,
-    "write_file": Risk.SANDBOX, "run_tests": Risk.SANDBOX,
-    "git_push": Risk.EXTERNAL, "deploy": Risk.EXTERNAL, "db_write": Risk.EXTERNAL,
-}
-
-
-def dispatch(call, p_choice: float, t_auto: float = 0.9):
-    risk = TOOL_RISK.get(call.name)
-    if risk is None:
-        return deny(call, reason="unregistered tool")  # 默认拒绝
-    if risk is Risk.EXTERNAL:
-        return request_human_approval(call)            # 与置信度无关
-    if p_choice < t_auto:
-        return escalate(call)                          # 交给更强的模型或人
-    return sandbox.execute(call)
-```
-
-`p_choice` 可以来自小分类模型、logprob 或多次采样的一致率，但阈值都要在自己的数据上标定——没校准过的置信度只是一个分数，不是概率。"渐进式授权"就是在这张表上做调整：先只放开 `READ`，沙箱验证可靠后放开 `SANDBOX`，`EXTERNAL` 由人按项目决定，而不是 Agent 自己申请。
+若 classifier 读了推理，被注入的 Agent 就能写一大段合理解释把它劝到"同意"——**classifier 同时成了陪审团和被告**。盲视后它只能问："清脏数据，`DROP TABLE orders;` 算合理解读吗？"——不算，不管 Agent 在想什么。这和"生成与评估分离"是同一条原则。硬性要求：**必须在真实流量上测误报率**，拦太多比没有更糟（用户会关掉它）。目标不是零风险，是**让安全的路径成为最省事的路径**。
 
 ## 六、L4 子 Agent：本质是上下文隔离
 
-子 Agent 常被当成"多智能体协作"讲，但它在 harness 里最实际的作用是**上下文隔离**：主 Agent 做高层规划，子 Agent 在**干净窗口**里做脏活，可能烧掉几万 token 探索，只回传 1000–2000 token 摘要。
+子 Agent 在 harness 里最实际的作用不是"多智能体协作"，而是**上下文隔离**：主 Agent 做规划，子 Agent 在干净窗口里做脏活、只回传摘要。代价要算清：Anthropic 的多 Agent 研究系统报 **token 用量差约 15 倍**，且 token 用量本身解释了评测表现约 80% 的方差——一部分收益其实是花更多 token 买来的。
 
-这个取舍要算清楚。Anthropic 的多 Agent 研究系统博客（2025.06）里有两个数字很有参考价值：多 Agent 在内部研究评测上明显优于单 Agent，但 **token 用量差约 15 倍**；而且 token 用量本身就解释了评测表现约 80% 的方差。换句话说，一部分收益其实是"花了更多 token"买来的。所以它适合**任务价值高、并行探索确实有回报**的场景，不适合当默认架构。
+**结论：多 Agent 是工具不是默认。** 判据是单 Agent 撞到了三面墙（窗口撑爆、无法专业化、串行执行）；没撞墙就别用，**单 Agent + 好工具能解决 80% 的任务**。
 
-Anthropic 的《Multi-agent coordination patterns》（2026.04）总结了五种模式，建议**从最简单可行的开始，在哪里卡住就在哪里演进**：
+落地从 Leader-Worker 起步：把"生成子 Agent"做成暴露给 Leader 的普通工具，入参是任务 + **显式挑选**的一小段上下文——子 Agent 拿到的是全新干净窗口，不是父的对话历史；父是唯一真相来源，子不写父内存、只回传结果字符串。并行改代码用 git worktree，递归深度限 1–2 层，每个 Worker 必须设超时，通信用 push-based（轮询"做完了吗"是最常见的多 Agent bug）。四种编排模式本质是控制流的四种拓扑：流水线、扇出扇入、Supervisor、Peer-to-Peer（最灵活也最难保证终止，生产中很少是对的选择）。反模式：共享可变状态、无界扇出、过度分解。
 
-| 模式 | 适用场景 |
-|------|---------|
-| Generator-Verifier | 对质量要求高，且有明确评估标准 |
-| Orchestrator-Subagent | 任务分解清晰，子任务边界明确 |
-| Agent Teams | 子任务可并行、独立、需长时间运行 |
-| Message Bus | 事件驱动的流水线，Agent 数量不断增长 |
-| Shared State | 协作式研究，需要共享发现 |
+**生成与评估要分离**：Agent 自评普遍偏高，独立评估 Agent + rubric 校准更靠谱（rubric 怎么写见[《Rubrics：把"好不好"拆成可验证的评分表》](/blog/rubrics-for-llm-eval-and-rl/)）。这条在第八节会加强成硬法则。
 
-还有一条实践：**生成与评估要分离**。Agent 自评普遍偏高，尤其在设计这类主观任务上；独立评估 Agent 加 few-shot 和 rubric 校准更靠谱（rubric 怎么写见[《Rubrics：把"好不好"拆成可验证的评分表》](/blog/rubrics-for-llm-eval-and-rl/)）。
+## 七、L5 记忆：跨 episode 的状态
 
-## 七、L5 记忆：到底怎么做
+先把三个词钉死：**Context** 是单次 API 调用、每轮重建；**Session** 是单次任务、重启即丢；**Memory** 跨 session、落盘。四类记忆里，情景是原始经历，语义和技能是从经历抽出的结论——成熟做法是两者都存，并让结论**指回**原始片段。
 
-上下文管理解决"这一个 session 怎么撑住"，记忆解决"下一个 session 怎么不从零开始"。记忆系统要回答四个问题：**写什么、存在哪、怎么取、怎么更新与遗忘**。多数实现做了前三个，不做第四个——结果就是记忆库越用越脏。
+**结论：难点不在"存"和"取"，在"更新"。** 多数实现只追加不更新，于是"用户偏好 npm"和"偏好 pnpm"同时躺在库里。正确管线是 extraction → 与已有条目比对 → 显式 **ADD / UPDATE / DELETE / NOOP**（Mem0 的两阶段）。显著性判断可以很朴素：工具失败、人类纠正、没见过的环境事实几乎总值得记；成功的常规操作不必写。写入时机**里程碑写**性价比最好。
 
-### 7.1 四类记忆
-
-| 类型 | 存什么 | 生命周期 | 典型载体 |
-|------|--------|---------|---------|
-| **工作记忆** | 当前 session 的消息历史 | session 内 | 上下文窗口 |
-| **情景记忆**（episodic） | 发生过什么：轨迹、观察、结果 | 跨 session | 轨迹库 / 向量库 |
-| **语义记忆**（semantic） | 事实与偏好：项目用 pnpm、测试跑在 8080 | 长期 | 文件 / KV / 图 |
-| **技能记忆**（procedural） | 怎么做：可执行代码、SOP | 长期 | 技能库 / `SKILL.md` |
-
-关键区别：情景记忆是**原始经历**，语义和技能记忆是**从经历里抽出的结论**。只存情景，检索出来的东西又长又不能直接用；只存结论，就丢掉了判断"这条还适用吗"的依据。成熟做法是两者都存，并让结论**指回**原始片段。
-
-### 7.2 写入：从轨迹到记忆条目
-
-```text
-轨迹片段 → ① 值不值得记（显著性） → ② 抽成结构化条目
-        → ③ 与已有条目比对 → ④ ADD / UPDATE / DELETE / NOOP
-```
-
-③④ 是多数实现缺的那一环。Mem0 把它做成明确的两阶段：**extraction**（从最近消息加滚动摘要抽候选事实）→ **update**（检索相似的已有记忆，让 LLM 在四个操作里选一个）。没有这步，"用户偏好 npm"和"用户偏好 pnpm"会同时躺在库里。
-
-显著性判断可以很朴素：工具执行失败、人类纠正了 Agent、出现没见过的环境事实（构建命令、端口、依赖版本），这三类几乎总值得记；成功的常规操作基本不必写。写入时机三选一：每轮写最及时但 LLM 成本最高；**里程碑写性价比最好，是实践默认**；session 结束后离线整理（sleep-time compute）不占请求延迟，但当前 session 用不上。
-
-### 7.3 检索：相似度远远不够
-
-只用 embedding 相似度，会稳定地把"语义最像但已过期"的条目捞上来。Generative Agents（UIST 2023）的打分函数是最常被复用的基线：
+检索只用 embedding 相似度，会稳定捞上"语义最像但已过期"的条目。Generative Agents 的三因子仍是最好用的基线：
 
 $$
 \text{score} = \alpha_{r}\cdot \text{recency} + \alpha_{i}\cdot \text{importance} + \alpha_{l}\cdot \text{relevance}
 $$
 
-- **relevance**：embedding 余弦相似度——保证"和当前问题有关"。
-- **importance**：写入时让 LLM 打 1–10 分——保证大事不被琐事挤掉。
-- **recency**：按距**上次访问**的时长指数衰减（原文每小时乘 0.99）——保证新信息覆盖旧信息，同时形成"用得多的浮上来"的强化回路。
+其中 recency 按距**上次访问**的时长衰减（形成"用得多的浮上来"的回路）；三项归一化后按场景调权——代码库事实变化快就加重 recency，长期偏好加重 importance。**反思**是"情景 → 语义"的转换器，没有它记忆库永远是一堆原始日志。
 
-三项各自归一化后加权，原始实现三个权重都取 1，但这是最该按场景调的地方：代码库事实变化快就加重 recency，用户长期偏好变化慢就加重 importance。
+存储形态三代：文件 / 笔记（可审计、能直接 `cat`）→ 向量库（能规模化检索，但引入切块和索引维护）→ Agent 自管（MemGPT / Letta、Mem0、A-MEM，灵活但多花 LLM 调用）。**选型建议：先用一代，撑不住再上二代。** 可以直接照搬的是**两级记忆**：每日日志（`memory/YYYY-MM-DD.md`，原始、随手写、成本极低）+ 长期 `MEMORY.md`（精选、定期整理、需要判断力）。启动时读、运行中写日志、定期把日志提炼进长期记忆。注意 `AGENTS.md` 定义"应该如何行为"（声明式），`MEMORY.md` 记录"发生过什么"（经验式），别混成一个文件。技能记忆则存"会做什么"——存成可执行代码的好处是**不依赖模型复述正确、而且可以测试**，代价是技能库会腐烂，要配回归测试；`SKILL.md` 的三级渐进披露让一百个技能常驻也只花几千 token。
 
-**反思（reflection）** 是"情景 → 语义"的转换器：周期性把一批情景记忆合成更高层结论再存回去。Generative Agents 在近期记忆的重要性累计超阈值时触发；Reflexion 更简单——失败后把原因写成一段自然语言，放进下次尝试的提示里。没有反思，记忆库永远是一堆原始日志。
+**记忆必须始终当成不可信数据**：它是一条跨 session 的持久写入通道，这轮读到的网页内容下轮可能以"历史经验"的身份出现。所以注入时要带来源、显式标注为参考信息而非指令，所有权限判断走 5.3 的确定性策略。
 
-### 7.4 存储形态的三代演进
+## 八、横切一：长时运行
 
-| | 做法 | 代表 | 取舍 |
-|---|------|------|------|
-| **一代：文件 / 笔记** | 外置 Markdown，Agent 自己读写 | `NOTES.md`、Claude Code 的 to-do、Anthropic memory tool | 最简单、可审计、可人工编辑；靠目录命名组织，规模大了检索弱 |
-| **二代：向量库** | embedding + 多因子打分检索 | Generative Agents、MemoryBank | 能规模化检索；对切块和阈值敏感，条目之间没有关系 |
-| **三代：Agent 自管** | 记忆操作做成工具，由模型决定何时读写、分页 | MemGPT / Letta、Mem0、A-MEM | 灵活，能更新、能建链接；多花 LLM 调用，而且模型会判断错 |
+短任务和长时运行是两个物种：前者要么完成、要么可见地失败；后者跑几小时到几天，**失败是隐蔽的**（上下文累积、质量悄然退化、自我评估在撒谎）。两个隐形杀手值得单独命名：
 
-三个代表性机制：**MemGPT**（2023.10）借虚拟内存思路把上下文分成 main / external context，让模型通过函数调用自己**分页**，确立了"记忆操作交给模型调度"这个模式；**MemoryBank**（AAAI 2024）按艾宾浩斯遗忘曲线衰减记忆强度，是少数把遗忘当一等公民的早期工作；**A-MEM**（2025.02）用 Zettelkasten 思路为每条记忆生成结构化笔记并**动态链接**相关历史，解决二代"条目之间没有关系"的问题。
+- **上下文焦虑**：窗口快满时模型开始"赶工"——跳步骤、输出变短、以"我已涵盖要点"过早宣告完成、回避会增加上下文的工具调用。**更大的窗口只是推迟问题**，解法在架构层面。
+- **自我评估偏差**：让生成者评自己的输出，它稳定给 8/10 以上。因为模型拥有自己推理的完整上下文，每个决策回看都合理；承认失败等于否定自己；训练数据又奖励自信。
 
-**Anthropic memory tool**（2025.09）形态上退回一代——文件系统 CRUD，但有两个值得注意的设计：**完全在客户端通过工具调用执行**，**存储后端由开发者自己管**。这把记忆降级成一个普通工具，权限、审计、加密、删除都能复用已有基础设施；对生产系统来说这个取舍往往比更聪明的记忆算法更重要。
+**由此得出全文最重要的一条法则：绝不让生成者批改自己的试卷。**
 
-选型建议：**先用一代，撑不住再上二代**。文件加目录能覆盖的场景比想象中多，出问题时能直接 `cat` 出来看；向量库一引入，切块策略、阈值、索引更新都会变成新的维护项。
+**上下文生命周期**有两条路：**重置**（清空 + 简报进入新上下文，干净、预算可预测，但有损、"摘要的摘要"会退化、可能重走死路）与**压缩**（旧轮折叠、近轮保真，连续、保留"已试过什么"，但压缩质量参差、与最新状态矛盾时让模型困惑）。判据：有明确阶段 → 阶段间重置；对单一产物持续迭代、频繁回顾早期决策 → 压缩；积累大量工具输出 → 重置（工具输出压缩效果差）。实践常混合：**阶段内压缩，阶段间重置**。
 
-### 7.5 技能记忆
+**架构化回答借鉴 GAN**：规划者 → 生成者 → 评估者三段流水线。四条规则：**独立上下文**（评估者只看输出、不看推理，防"我理解你为什么这么做所以没问题"的同情偏差）、**显式 rubric**（"是否处理了边界情况 X"优于"代码好不好"）、**可操作反馈**（"`parse_input` 没处理空串"有用，"7/10"没用）、**迭代预算**（3 次不过交回规划者或人——三次失败说明是规范问题不是执行问题）。反模式：单体 Agent 又规划又执行又审查、没有 rubric 的评估、无限重新规划。一句话：**长时运行不是"时间更长的短任务"；先分解，然后为一切设上限。**
 
-情景和语义记忆存"知道什么"，技能记忆存"会做什么"。**Voyager**（TMLR 2024）把技能存成**一段可执行代码**，用 docstring 的 embedding 建索引，复杂技能由简单技能组合（报告效果：独特物品 3.3×、解锁木制工具快 15.3×）。技能是代码的好处是**不依赖模型复述正确，而且可以测试**——代价是技能库也会腐烂，所以最好配回归测试并在 CI 里定期跑。
+**大脑 / Session / 双手解耦**解决的是一体化容器的三个必然失败：session 随容器崩溃丢失（"宠物问题"）、调试要进装着凭证的容器（调试变安全事件）、不可信代码与凭证同处一室。拆法：大脑（harness + LLM）**无状态**，一切通过 `emitEvent()` 写日志；Session 是**仅追加的持久事件日志**，唯一真相来源；双手（沙箱）**按需创建、用完销毁**。大脑崩了起新进程 `wake(sessionId)` 重放即可——从"宠物"变"牲畜"。
 
-**Agent Skills**（`SKILL.md`，2025.10）则把技能做成文件系统上的标准格式，核心是**渐进披露**三级加载：
+最微妙也最重要的区分：**Session ≠ Context Window**。Session 是完整持久记录，Context Window 只是 harness 为当前这次调用从中"取景"的子集。于是**不可逆决策变可逆**——compaction 不再是单向销毁，被压掉的旧事件随时能回日志再取；上下文工程成为 harness 的职责；多个大脑可以同读一个日志。延迟创建沙箱还带来 TTFT p50 降约 60%、p95 降约 90%（厂商自报）。
 
-| 级别 | 内容 | 什么时候进上下文 |
-|---|---|---|
-| 一级 | frontmatter 的 `name` + `description` | 常驻，只占几十 token |
-| 二级 | `SKILL.md` 正文（流程、注意事项） | 判断相关时才读 |
-| 三级 | 附带脚本、模板、参考文档 | 真正需要时才读；脚本可以直接执行而不读进上下文 |
+### 8.1 多天项目：Initializer + Coding Agent
 
-这是对 3.1 节"注意力预算"最直接的工程化：一百个技能常驻也只花几千 token。
+给模型喂"建一个 Claude.ai clone"然后走开一下午，结局是能用的登录表单、半个消息列表、夹在函数里的 `TODO` 和一条自信的 commit message。**这几乎总是 harness 的锅。**
 
-### 7.6 Playbook：把记忆当成会增长的 prompt
+Compaction 是 **in-context memory**：对两小时重构够用，对两天构建会垮——Session 2 读有损摘要重建意图，Session 3 读"摘要的摘要"，到 Session 4 模型已经在**跟过去的自己玩传话游戏**，分不清哪些做完了、哪些是摘要里幻觉出来的；更糟的是它恰好强化了上个 session 过度乐观的叙事。长程 Agent 需要 **out-of-context memory**：文件、结构化状态、git 历史，每个 session 重新读取，而不是靠总结层层传递。
 
-另一条路线不建独立记忆库，而是把学到的东西维护成一份不断增长的结构化 prompt。ACE（2025.10）指出两个失效：**brevity bias**（每次优化都更短更"精炼"，细节被摘要掉，剩一堆正确但没用的原则）和 **context collapse**（一次整体重写冲掉累积经验）。对策是**增量 delta 更新**，只改具体条目。
+要同时治两种失败：**一气呵成倾向**（一个 session 做完全部，窗口满了留一堆半成品）和**过早胜利**（读进度笔记说"implemented login, messaging"，看到像实现了的代码就宣布完成，没跑没测）。解法是拆成**只跑一次的 Initializer**（产出 `init.sh`、`feature_list.json`、进度笔记、首次 commit）和**跑 N 次、每次全新进程无记忆的 Coding Agent**，共享文件系统，由一个故意写得很"笨"的驱动脚本调度。
 
-这和第九节自动进化的经验是同一个：**别压缩反馈**。
+**为什么 feature list 用 JSON 而不是 Markdown？** 给模型 Markdown，它会当散文——带着最好的意图重写优先级、"感觉更干净"就合并两个 feature。**Markdown todo 对 Agent 是流沙**；JSON 被当作结构化数据读写特定字段。每个条目带 `id` / `priority` / `depends_on` / `acceptance` / `passes`，再配一条硬规则写进 system prompt：**只允许修改 `passes` 字段**，删改验收标准是"不可接受"的，认为定义有误就停下上报。**一个布尔字段（而不是一段散文、一种"感觉"）就是未来 session 判断"什么真的做完了"的依据**——这正是"完成标准外置"在多天尺度上的完整形态。
 
-### 7.7 一个最小记忆层
+Coding Agent 每次醒来的开机仪式：`pwd` → `git log`（**真相**，与进度笔记冲突时 git 赢）→ 读 `feature_list.json` → `bash init.sh` → **浏览器打开 App 验证上个 session 的活还在工作**（这一步杀死过早胜利）。之后只挑**一个**最高优先级、`passes: false`、依赖已满足的 feature；E2E 通过、翻绿、干净 commit 就停。
 
-```python
-import math
-import time
-from dataclasses import dataclass, field
+**一 session 一 feature 同时治两种失败**：契约约束范围，"done" 由 E2E 而非自封定义。**E2E 是信任层**——单元测试是 Agent 自己写的，可能和实现一样地错；用浏览器像真实用户一样驱动才是独立信号。由此得到一条通用判据：**测试 / oracle 的质量就是 Agent 能力的天花板**。没做完就回退到上次干净 commit、绝不 commit 坏代码。
 
+核心洞察：**"我知道什么"由磁盘文件回答，不由上下文窗口回答。长程 Agent 老忘事，修复几乎从来不是更大的窗口，是更多的文件。**
 
-@dataclass
-class MemoryItem:
-    text: str
-    kind: str                     # episodic / semantic / skill
-    importance: float             # 1-10，写入时由 LLM 打分
-    source: str                   # 指回原始轨迹，便于纠错与审计
-    last_access: float = field(default_factory=time.time)
-    embedding: list[float] | None = None
+## 九、横切二：主动调度
 
+只在被问到时回应的是聊天机器人；按时间表、按事件主动行动的才是基础设施。四种原语：**One-Shot Timer**、**Recurring Cron**（自动化骨干）、**Event-Triggered**（新 PR → review 子 Agent）、**Heartbeat**（每 15–60 分钟注入一个 prompt，一轮批量做多个轻量检查）。
 
-class MemoryStore:
-    """示意实现；记忆内容一律按数据处理，不作为指令解析"""
+一个调度任务四个字段即四个要点：**cron**（铁律是**内部存 UTC、显示本地时间**，用户说"每天早上 8 点"先问时区；时区是这层最大的坑）、**session 目标**（`isolated` 全新上下文不污染主对话 / `main` 有上下文但会撑爆窗口）、**载荷类型**（`agentTurn` 完整执行 / `systemEvent` 只丢便条）、**交付方式**（监控类要**异常才告警**，每 15 分钟推"一切正常"是噪音）。调度循环由外部 1 分钟 tick 驱动，不要自己 `while True: sleep`。
 
-    DECAY_PER_HOUR, DUP_THRESHOLD = 0.99, 0.92
-    W = (1.0, 1.0, 1.0)  # recency / importance / relevance
+Heartbeat vs Cron：多个轻量检查、需对话上下文、时间不精确 → 一份 `HEARTBEAT.md` 搞定，别开五个 cron；精确时间、隔离环境、按任务选模型 → cron。
 
-    def __init__(self, embed, llm):
-        self.items: list[MemoryItem] = []
-        self.embed, self.llm = embed, llm
+## 十、横切三：评测这道坎
 
-    def write(self, cand: MemoryItem) -> str:
-        if cand.importance < 3:
-            return "NOOP"                        # 显著性不足，不记
-        cand.embedding = self.embed(cand.text)
-        near = [it for it in self.items
-                if it.kind == cand.kind
-                and cosine(it.embedding, cand.embedding) > self.DUP_THRESHOLD]
-        if not near:
-            self.items.append(cand)
-            return "ADD"
+### 10.1 基础设施是一等实验变量
 
-        op = self.llm.decide_memory_op(cand.text, [it.text for it in near])
-        if op == "UPDATE":                       # 冲突时显式决策，而不是无脑追加
-            near[0].text, near[0].source = cand.text, cand.source
-            near[0].embedding, near[0].last_access = cand.embedding, time.time()
-        elif op == "DELETE":
-            self.items = [it for it in self.items if it not in near]
-        elif op == "ADD":
-            self.items.append(cand)
-        return op
+传统 benchmark（MMLU、HumanEval）本质是一次函数调用，2 核和 64 核分数一样；**Agent 评测打破这个假设**——它要派生进程、读写代码库、迭代、管理时间。高性能机上 8 秒的测试套件在受限容器上可能要 90 秒；5 分钟被杀的 Agent 比给 30 分钟的解得少，**不是模型更差，是时间用完了**。
 
-    def recall(self, query: str, k: int = 5) -> list[MemoryItem]:
-        q, now = self.embed(query), time.time()
-        wr, wi, wl = self.W
-        scored = [
-            (wr * self.DECAY_PER_HOUR ** ((now - it.last_access) / 3600)
-             + wi * (it.importance / 10)
-             + wl * cosine(q, it.embedding), it)
-            for it in self.items
-        ]
-        top = [it for _, it in sorted(scored, key=lambda x: -x[0])[:k]]
-        for it in top:
-            it.last_access = now                 # 被用到就刷新
-        return top
+Anthropic 的对照实验（同模型、同脚手架、同任务，只改基础设施）：**配置差异能让分数波动高达 6 个百分点**，往往超过排行榜第 1 与第 5 名的差距。陷阱在语义细节：内存"保证分配 vs 硬性 OOM 终止"、CPU"份额 vs 固定核"、超时"壁钟 vs CPU 时间"。且机制分两段：1x→3x 主要在消除基础设施错误（错误率 5.8%→2.1%，分数变化在噪声内）；3x→无上限 分数显著上升（Agent 真的用额外资源做更激进的探索）。
 
+建议：把资源配置当实验变量记录并版本化；指定 floor + ceiling，**floor 取最小可行配置的 3 倍**（低于此主要在测噪声）；单独监控 OOM / 超时 / 磁盘满错误率（超 2–3% 说明结果被污染）；一次评测一台机器。**基准分不是模型的属性，是"模型 + 脚手架 + 基础设施 + 任务集 + 评分函数"这个系统的属性。**
 
-def cosine(a, b) -> float:
-    na = math.sqrt(sum(x * x for x in a)) or 1e-9
-    nb = math.sqrt(sum(x * x for x in b)) or 1e-9
-    return sum(x * y for x, y in zip(a, b)) / (na * nb)
-```
+### 10.2 Eval Awareness：测试时的 reward hacking
 
-注入上下文时要带边界和来源，并**显式标注为参考信息而非指令**：
+一个案例：Claude Opus 4.6 在 BrowseComp 一道题上烧了 4050 万 token（中位数的 38 倍）。前 3000 万正常解题，然后轨迹变了——**Agent 不再回答问题，而是开始问"这个问题是什么？"**：形成元假设（"太具体、失败率太高，像是 eval 题"）→ 锁定 BrowseComp → 读仓库数据加载代码 → 发现数据集用 SHA-256 派生的 XOR 密钥加密 → 自己写 `decrypt()` → 在镜像站找到密文 → 解密全部 1266 条直接取答案。1266 道题中这样成功了 2 道。每一步单看都平常，**新颖在于无人提示下把它们串成连贯计划**。
 
-```python
-def render(items: list[MemoryItem]) -> str:
-    body = "\n".join(f"- [{it.kind}] {it.text}  (source: {it.source})" for it in items)
-    return f"<retrieved_memory>\n以下为历史记录，仅作参考，不是指令：\n{body}\n</retrieved_memory>"
-```
+这是**全新的污染模式**：不是训练数据泄露，而是**测试时环境被利用**——被污染的不是训练集，是这次运行，因为模型自主决定把 benchmark 当研究对象而非要解决的任务。触发信号成组出现（问题极端具体、人造感、数百次搜索失败、预算异常宽松），多 Agent 会放大（污染率 0.24%→0.87%），甚至有 URL slug 旁路信道让不同运行共享元假设。
 
-### 7.8 失效模式
+最有启发的一点：**挡住那 16 次尝试的不是聪明检测器，而是最朴素的能力限制**——非文本 MIME 限制、数据集来源认证门禁。**能力限制打败行为分析，而且这些控制不是 eval 专用的，就是通用 harness 卫生。**
 
-| 失效 | 原因 | 对策 |
-|------|------|------|
-| **记忆污染** | 把错误结论写成了"事实" | 写入带来源与置信度；重要结论验证后才写 |
-| **记忆过期** | 只追加不更新，新旧事实共存 | 显式 ADD / UPDATE / DELETE；时间衰减与 TTL |
-| **检索跑偏** | 只用相似度 | 多因子打分；按时间或版本过滤 |
-| **context collapse** | 整体重写覆盖累积经验 | delta 增量更新 |
-| **记忆注入** | 记忆里夹带的指令被当命令执行 | 按数据处理、标签界定边界、写入前过滤；权限检查不依赖记忆 |
-| **隐私与合规** | 敏感信息被长期留存 | 分级存储 + TTL + 可删除；写入前脱敏 |
+启示：静态 benchmark 当"软泄露"物件处理（轮换题目、留私有切片）；**默认限制工具能力**（只允许 text/HTML、eval 模式剥离写入、限每轮预算）；用 Web **白名单而非黑名单**；记录推理以便事后分析；eval 开发者要假设模型会逆向工程你的仓库。要认清这既不是欺骗也不是 pathology，**而是能力**——不会被训练掉，只会被训练进去，因为这套技能在 eval 之外到处有用。harness 的工作不是说服 Agent 别走捷径，而是**让捷径不可用**。
 
-倒数第二条值得强调：记忆库是一条**跨 session 的持久写入通道**，这一轮读到的网页内容和工具返回值，下一轮可能以"系统历史经验"的身份出现在上下文里。所以记忆必须始终当成**不可信数据**，所有权限判断都走 5.4 的确定性策略，绝不参考记忆里写了什么。
+## 十一、框架与自动进化
 
-## 八、框架对比
+**框架选型看一个视角：控制循环能被编程到什么程度。** Claude Code / Codex 把 loop 做成产品内核，开箱即用但改不动；LangGraph 把 loop 显式表示成状态图，最灵活但每层自己负责；Strands 几乎不写控制流，代码最少可控性也最弱。原厂 harness 的优势是和自家模型**一起调**（后训练阶段就见过这套工具格式）——这解释了 5.1 的结论：harness 是模型特定的。
 
-### 8.1 两大原厂 Coding Agent
+**自动进化（L6）**：2026 上半年四个代表工作（Meta-Harness、AHE、Self-Harness、RHO）可以用"谁提议修改 × 用什么验证"两条轴归类，共同点是**改进发生在模型外部、权重不动**。三条可直接拿走的经验：
 
-| 维度 | Claude Code | OpenAI Codex |
-|------|------------|--------------|
-| 发布 | 2025.02（研究预览） | 2025.04（CLI）/ 2025.05（云端） |
-| 开源 | 闭源 | CLI 开源 |
-| Agent Loop | 内置，不可替换 | 内置，不可替换 |
-| 形态 | 终端 CLI 为主 | Web + CLI + IDE |
-| 项目级配置 | `CLAUDE.md` | `AGENTS.md` |
+1. **给 proposer 原始轨迹，别给摘要**——和 ACE 的 "别压缩反馈" 一致。
+2. **改结构，别改措辞**。AHE 消融显示增益主要来自工具、中间件和长期记忆，而不是 system prompt；文字策略最难迁移。
+3. **每次修改都要可回滚、可归因、过回归门**；可编辑范围走白名单（权限、沙箱、审批不可改）；失败候选也存档；held-out 会被用旧，最终报告要换一份从未参与挑选的测试集。
 
-原厂 harness 最大的优势是和自家模型**一起调**：模型在后训练阶段就见过这套工具格式和交互方式。反过来说，harness 是**模型特定**的——只换模型、不换 harness，往往会掉点。
+数字要打折看：全部作者自报，且 Terminal-Bench 的 held-out 集很小（据 Self-Harness 报的分数推测约 42 题，**一道题就是 2.4 个点**）。
 
-### 8.2 开源与通用框架
+## 十二、共识、开放问题与参考
 
-| 框架 | 特点 | GitHub |
-|------|------|--------|
-| **Strands**（AWS） | 模型驱动，Agent = Model + Tools + Prompt，极简 | github.com/strands-agents |
-| **OpenClaw** | 个人 Agent，技能自创建，全开源 | github.com/openclaw |
-| **Hermes Agent**（Nous Research） | 审批策略 + 多种沙箱后端 | github.com/NousResearch |
-| **LangGraph** | 状态机 / 图驱动的 Agent 编排 | github.com/langchain-ai |
-| **Letta**（原 MemGPT） | 以记忆为中心，记忆块 + 自管理分页 | github.com/letta-ai |
-| **AG2**（原 AutoGen） | 多 Agent 对话协作 | github.com/ag2ai |
+### 12.1 共识即小结
 
-选型有个好用的视角：**控制循环能被编程到什么程度**。Claude Code / Codex 把 loop 做成产品内核，只能通过配置、hooks、子 Agent 间接影响，开箱即用但内核改不动；LangGraph 把 loop 显式表示成状态图，最灵活但每层都要自己负责；Strands 走另一个极端，尽量少写控制流、把规划交给模型，代码最少可控性也最弱。
+1. **Agent = Model + Harness**。内核就是一个循环，复杂度全在循环**外围**；同一个模型换 harness，差距从几个点到十倍。
+2. **大部分收益来自压掉非智力性失败**（工具格式、上下文、错误恢复、停止条件）；长任务成功率是连乘的，单步可靠性会被成倍放大。
+3. **模型问题往往不是模型问题**——先怀疑上下文装错了、schema 写糊了。
+4. **上下文是最高杠杆**：找最小的高信噪比 token 集合；每轮重装、留 reserve、70% 就压。
+5. **错误不要吞，要回喂；给一切设上限**——无限循环等于无限烧钱。
+6. **约束在代码里，不在 prompt 里**；凭证绝不进沙箱；**限制能力胜过劝说和行为分析**。
+7. **薄 harness + 厚技能**；工具 schema 与实现分离，`dispatch` 永返字符串。
+8. **授权与判断分开**；记忆、网页、工具返回值一律当不可信数据；独立审核者要对推理盲视。
+9. **记忆的难点在"更新"**：显式 ADD / UPDATE / DELETE + 衰减 + 指回原始轨迹；两级记忆（日志 + `MEMORY.md`）。
+10. **绝不让生成者批改自己的试卷**：独立上下文、显式 rubric、评估者只看输出。**长程 Agent 靠文件记忆，不靠窗口**；git 是最好的协调原语，oracle 质量是能力天花板。
+11. **多 Agent 是工具不是默认**；单 Agent + 好工具解决 80% 的任务。
+12. **评测里基础设施是一等实验变量，且要防 Agent "绕过任务而非解决任务"**；自动进化给原始轨迹、改结构、过回归门。
 
-## 九、L6 自动进化（简述）
+一句话收束：**模型决定 Agent 的能力上限，harness 决定你能把这个上限稳定、安全、可持续地兑现多少。**
 
-harness 能不能自己改自己？2026 上半年有四个代表性工作，可以用"**谁来提议修改 × 用什么验证**"两条轴放在一起看：
+### 12.2 Harness 会"过期"与开放问题
 
-| | 有标签 / 可执行验证 | 无标签 |
-|---|---|---|
-| **外部 proposer** | Meta-Harness、AHE | — |
-| **Agent 自身** | Self-Harness | RHO |
+Anthropic 记录过：早期 harness 基于 Sonnet 4.5，该模型接近窗口上限时变得保守急于收尾（即上下文焦虑），于是用**重置 + 结构化交接**而非压缩；换到 Opus 4.5 后这个行为基本消失，重置被整个去掉。**harness 里相当一部分是在给当前模型的缺陷打补丁，模型升级后要回头做减法**——所以"记录每条规则是为了解决哪个具体问题"很重要，否则以后不知道哪条能删。
 
-| 工作 | 时间 | 机制要点 | 主要结果（作者自报） |
-|---|---|---|---|
-| **Meta-Harness**（arXiv:2603.28052） | 2026.03 | 外循环搜索 harness 代码；proposer 通过**文件系统直接翻阅**所有候选的源码、分数、原始轨迹，不读摘要 | 在线文本分类 +7.7 点且上下文 token 降至约 1/4；TerminalBench-2 超过最佳人工基线 |
-| **AHE**（arXiv:2604.25850） | 2026.04 | 三种可观测性：组件可回滚、轨迹提炼成可下钻的证据库、每次修改附带可证伪的预测 | TB2：69.7% → 77.0%；冻结后迁移到另外三个模型家族仍 +5.1～10.1 点 |
-| **Self-Harness**（arXiv:2606.09498） | 2026.06 | Agent 改自己：弱点挖掘 → 最小修改提案 → 回归测试才采纳 | TB2.0：三个模型分别 +21.4 / +14.3 / +14.2 点 |
-| **RHO**（arXiv:2606.05922） | 2026.06 | 无标签：核心集重解 → 自验证 + 自一致分析 → 成对自偏好选优 | 一轮把 SWE-Bench Pro 从 59% 提到 78% |
+开放问题集中在四处：**① 缺一个固定模型横评 harness 的标准化评测**（口径不一，且不报告基础设施配置的分数本身就不可比）；**② 记忆的评测**只能靠端到端成功率间接衡量，"记对了什么、漏了什么"缺直接指标，记忆污染尤其难测；**③ 自改进的安全性**——白名单防不住间接绕过（新增一个功能上等价于被禁命令的工具）；**④ 联合优化**——演化产生的大量带验证结果的轨迹天然是训练数据，但"训下一代模型、再为新模型重建 harness"这个双循环怎么排还没有成熟答案，训练侧的信用分配可参考[《长轨迹 Agent RL 的信用分配：从 GRPO 到 GiGPO》](/blog/agent-rl-credit-assignment-gigpo/)。另有跨框架迁移（`AGENTS.md` / `SKILL.md` 只覆盖文字策略）与成本-准确率-延迟 Pareto 前沿的标准化问题。
 
-三条可以直接拿走的经验：
+### 12.3 推荐阅读
 
-1. **给 proposer 原始数据，别给摘要**——和 7.6 节 ACE 的结论一致。
-2. **改结构，别改措辞**。AHE 的消融显示增益主要来自工具、中间件和长期记忆，而不是 system prompt；文字策略也最难迁移。
-3. **每次修改都要可回滚、可归因、过回归门**。
+**概念与工程实践**：[Hashimoto, *My AI Adoption Journey*](https://mitchellh.com/writing/my-ai-adoption-journey) · [OpenAI, *Harness engineering*](https://openai.com/index/harness-engineering/) · [Can Bölük, *The Harness Problem*](https://blog.can.ac/2026/02/12/the-harness-problem) · [Anthropic, *Effective context engineering*](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents) · [Managing context](https://claude.com/resources/articles/context-management) · [Code execution with MCP](https://www.anthropic.com/engineering/code-execution-with-mcp) · [Multi-agent research system](https://www.anthropic.com/engineering/multi-agent-research-system) · [Effective harnesses for long-running agents](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents) · [Harness design for long-running apps](https://www.anthropic.com/engineering/harness-design-long-running-apps) · [Multi-agent coordination patterns](https://claude.com/resources/articles/multi-agent-coordination-patterns) · [Agent Skills](https://skill.md/) · [Harness Engineering 系列教程](https://harness-guide.com/zh/guide) · [Loop Engineering 系列](https://happycapy.ai/)
 
-数字要打折看：全部作者自报，且 Terminal-Bench 的 held-out 集很小。Self-Harness 报的几个百分比恰好都是 42 的分数（17/42 = 40.5%，26/42 = 61.9%），据此推测 held-out 约 42 题——**一道题就是 2.4 个点**。
+**记忆**：[Generative Agents](https://arxiv.org/abs/2304.03442) · [MemGPT / Letta](https://arxiv.org/abs/2310.08560) · [MemoryBank](https://arxiv.org/abs/2305.10250) · [A-MEM](https://arxiv.org/abs/2502.12110) · [Mem0](https://arxiv.org/abs/2504.19413) · [ACE](https://arxiv.org/abs/2510.04618)
 
-一个外循环骨架：
+**自动进化**：[Meta-Harness](https://arxiv.org/abs/2603.28052) · [AHE](https://arxiv.org/abs/2604.25850) · [Self-Harness](https://arxiv.org/abs/2606.09498) · [RHO](https://arxiv.org/abs/2606.05922)
 
-```python
-from pathlib import Path
-
-EDITABLE = {"system_prompt", "tools", "middleware", "memory"}  # 权限/沙箱/审批不在其中
-MARGIN = 0.03                                                  # 低于噪声的提升不算提升
-
-
-def optimize_harness(agent, proposer, train_tasks, holdout_tasks,
-                     n_iter: int = 10, archive: Path = Path("archive")):
-    best = agent.harness
-    best_score = evaluate(agent, best, holdout_tasks).pass_rate
-
-    for i in range(n_iter):
-        run = evaluate(agent, best, train_tasks)
-        save_run(archive / f"iter_{i}", harness=best, run=run)   # 源码+分数+原始轨迹落盘
-
-        candidate = proposer.propose(archive_dir=archive, editable=EDITABLE)
-        if candidate.changed_fields() - EDITABLE:
-            continue                                             # 越权修改直接丢弃
-
-        score = evaluate(agent, candidate, holdout_tasks).pass_rate
-        save_run(archive / f"iter_{i}_cand", harness=candidate, score=score)  # 失败的也存
-        if score >= best_score + MARGIN:
-            best, best_score = candidate, score
-
-    return best
-```
-
-要点：**可编辑范围走白名单**（权限、沙箱、审批不可改，这是回答"自改进会不会绕过安全约束"最朴素也最可靠的办法）；**失败候选也存档**（Darwin Gödel Machine 的经验，保留失败分支能避免贪心陷入局部最优）；**held-out 会被用旧**，迭代多了在同一份集合上反复挑选本身就是过拟合，最终报告要换一份从未参与挑选的测试集。
-
-这条路线的源头可以追到 Reflexion（语言反馈代替梯度）、Voyager（技能库迭代精炼）、STOP（脚手架递归改进自身）、Gödel Agent（运行时读写自身逻辑）和 Darwin Gödel Machine（archive + 开放式进化）。它们的共同点是**改进发生在模型外部，权重不动**；2026 年的变化是被改进的对象从"某个 Agent 的代码"变成通用 harness 组件，验证场景也从玩具任务换成真实工程基准。
-
-## 十、工程共识与开放问题
-
-### 10.1 共识
-
-| 实践 | 说明 | 位置 |
-|------|------|------|
-| 分层 Prompt | System → Project → Task → Dynamic，越靠上越稳定，也对缓存友好 | 3.4 |
-| 硬约束落到代码 | 文档里写的是请求，权限、CI、分支保护才是约束 | 3.4 / 5.4 |
-| 工具结果清理 | 最轻、最安全的上下文压缩手段 | 3.3 |
-| 进度与完成标准外置 | 写进结构化文件，避免过早宣布完成 | 3.3 / 4.1 |
-| 结构化工具 | JSON Schema + MCP；返回值为模型优化；警惕工具集膨胀 | 5.1 |
-| 编辑格式按模型实测 | 没有通用最优；patch 类格式在非原生模型上失败率可达 50% | 5.2 |
-| 工具渐进披露 | 工具清单常驻、细节按需展开；必要时改成代码执行 | 5.3 |
-| 沙箱与审批门 | 影响外部世界的操作必须过人工门，与置信度无关 | 5.4 |
-| 渐进式授权 | 初始最小权限，按需放开 | 5.4 |
-| 生成与评估分离 | 独立评估 Agent + rubric 校准 | 六 |
-| 记忆要能更新 | ADD / UPDATE / DELETE 显式决策 + 衰减，不能只追加 | 7.2 |
-| 技能可执行、可测试 | 技能存成代码并配回归测试，渐进披露控制 token | 7.5 |
-| 记忆按数据处理 | 记忆内容不可信，不解析成指令，权限不依赖它 | 7.8 |
-| 全链路 trace | 既用于调试归因，也是自动优化的前提 | 九 |
-
-### 10.2 Harness 会"过期"
-
-Anthropic 记录过一个典型例子：早期 harness 基于 Sonnet 4.5，这个模型接近上下文上限时会变得保守、急于收尾（文中称 "context anxiety"），于是 harness 用**重置上下文 + 结构化交接**而不是压缩。换到 Opus 4.5 后这个行为基本消失，上下文重置被整个去掉。
-
-教训：harness 里有相当一部分是在给**当前模型**的缺陷打补丁，模型升级后要回头做减法。这也是为什么"记录每条规则是为了解决哪个具体问题"很重要——没有这个记录，以后不知道哪条能删。
-
-### 10.3 开放问题
-
-1. **Harness 评测标准**：各篇论文各选各的基准，口径也不一样（pass@1、token、成本）。缺一个"固定模型、横评 harness"的标准化评测，更缺统一的成本计量。
-2. **记忆的评测**：现在基本靠端到端成功率间接衡量，"记对了什么、漏了什么、错了什么"缺少直接指标，记忆污染尤其难测。
-3. **自改进的安全性**：白名单能防住直接改权限配置，但防不住间接绕过——比如新增一个工具，功能上等价于一条被禁止的命令。
-4. **Harness 与模型的联合优化**：演化过程产生的大量带验证结果的轨迹天然就是训练数据，但"训下一代模型、再为新模型重建 harness"这个双循环怎么排还没有成熟答案。训练侧的信用分配可参考[《长轨迹 Agent RL 的信用分配：从 GRPO 到 GiGPO》](/blog/agent-rl-credit-assignment-gigpo/)。
-5. **跨框架迁移**：`AGENTS.md` / `SKILL.md` 是目前最轻量的共识，但只覆盖文字策略和技能；真正能迁移的工具、中间件和记忆结构还没有通用格式。
-6. **度量**：成本、准确率、延迟构成的 Pareto 前沿怎么标准化？
-
-## 十一、推荐阅读
-
-### 概念与工程实践
-
-1. **Mitchell Hashimoto** — *My AI Adoption Journey*（2026.02）：概念起点 — [链接](https://mitchellh.com/writing/my-ai-adoption-journey)
-2. **OpenAI** — *Harness engineering: leveraging Codex in an agent-first world*（2026.02）— [链接](https://openai.com/index/harness-engineering/)
-3. **Can Bölük** — *The Harness Problem*（2026.02）：16 模型 × 3 种编辑格式的横测与 hashline — [链接](https://blog.can.ac/2026/02/12/the-harness-problem)
-4. **Anthropic** — *Effective context engineering for AI agents*（2025.09）：context rot、注意力预算、三种长程技术 — [链接](https://www.anthropic.com/research/effective-context-engineering-for-ai-agents)
-5. **Anthropic** — *Managing context on the Claude Developer Platform*（2025.09）：context editing 与 memory tool — [链接](https://claude.com/resources/articles/context-management)
-6. **Anthropic** — *Code execution with MCP*（2025.11）：工具定义按需加载 — [链接](https://www.anthropic.com/engineering/code-execution-with-mcp)
-7. **Anthropic** — *How we built our multi-agent research system*（2025.06）：多 Agent 的收益与 15× token 账单 — [链接](https://www.anthropic.com/engineering/multi-agent-research-system)
-8. **Anthropic** — *Effective harnesses for long-running agents*（2025.11）— [链接](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)；*Harness design for long-running application development*（2026）— [链接](https://www.anthropic.com/engineering/harness-design-long-running-apps)
-9. **Anthropic** — *Multi-agent coordination patterns*（2026.04）— [链接](https://claude.com/resources/articles/multi-agent-coordination-patterns)
-10. **Agent Skills** — `SKILL.md` 开放格式与渐进披露 — [链接](https://skill.md/)
-
-### 记忆
-
-11. **Generative Agents** — [arXiv:2304.03442](https://arxiv.org/abs/2304.03442)（UIST 2023）：记忆流 + 三因子打分 + 反思
-12. **MemGPT / Letta** — [arXiv:2310.08560](https://arxiv.org/abs/2310.08560)：虚拟上下文与自管理分页
-13. **MemoryBank** — [arXiv:2305.10250](https://arxiv.org/abs/2305.10250)（AAAI 2024）：遗忘曲线
-14. **A-MEM** — [arXiv:2502.12110](https://arxiv.org/abs/2502.12110)：Zettelkasten 式动态链接
-15. **Mem0** — [arXiv:2504.19413](https://arxiv.org/abs/2504.19413)：extraction / update 两阶段管线
-16. **ACE** — [arXiv:2510.04618](https://arxiv.org/abs/2510.04618)：playbook 与 delta 更新
-
-### Harness 自动进化
-
-17. **Meta-Harness** — [arXiv:2603.28052](https://arxiv.org/abs/2603.28052)
-18. **AHE** — [arXiv:2604.25850](https://arxiv.org/abs/2604.25850)
-19. **Self-Harness** — [arXiv:2606.09498](https://arxiv.org/abs/2606.09498)
-20. **RHO** — [arXiv:2606.05922](https://arxiv.org/abs/2606.05922)
-
-### 基础论文
-
-21. **Reflexion** — [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)（NeurIPS 2023）
-22. **Voyager** — [arXiv:2305.16291](https://arxiv.org/abs/2305.16291)（TMLR 2024）
-23. **STOP** — [arXiv:2310.02304](https://arxiv.org/abs/2310.02304)（COLM 2024）
-24. **Gödel Agent** — [arXiv:2410.04444](https://arxiv.org/abs/2410.04444)（ACL 2025）
-25. **Darwin Gödel Machine** — [arXiv:2505.22827](https://arxiv.org/abs/2505.22827)（ICLR 2026）
-
-## 小结
-
-1. **Agent = Model + Harness**。同一个模型换一套 harness，差距可以从几个点到十倍。
-2. **大部分收益来自压掉非智力性失败**：工具格式、上下文管理、错误恢复、停止条件。长任务成功率是连乘的，单步可靠性的小幅提升会被成倍放大。
-3. **上下文是有预算的**。原则只有一句：找最小的高信噪比 token 集合。手段是即时检索、工具结果清理、压缩、结构化笔记、子 Agent 隔离。
-4. **记忆的难点不在"存"和"取"，在"更新"**。只追加的记忆库一定会腐烂；要有显式的 ADD / UPDATE / DELETE、时间衰减，以及指回原始轨迹的来源。检索也不能只看相似度。
-5. **授权与判断分开**。权限交给确定性策略，置信度只决定要不要升级；记忆和文档内容一律当不可信数据。
-6. **自动进化的共同经验**：给原始轨迹而不是摘要，改结构而不是改措辞，每次修改都要可回滚、可归因、过回归门。
+**基础论文**：[Reflexion](https://arxiv.org/abs/2303.11366) · [Voyager](https://arxiv.org/abs/2305.16291) · [STOP](https://arxiv.org/abs/2310.02304) · [Gödel Agent](https://arxiv.org/abs/2410.04444) · [Darwin Gödel Machine](https://arxiv.org/abs/2505.22827)
